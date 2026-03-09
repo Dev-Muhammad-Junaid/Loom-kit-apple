@@ -27,6 +27,7 @@ if [[ -z "$SYMBOLGRAPH_DIR" ]]; then
   SYMBOLGRAPH_DIR="$(find "$ROOT_DIR/.build" -type d -name symbolgraph -print | head -n 1)"
 fi
 LOOM_SYMBOLGRAPH="$SYMBOLGRAPH_DIR/Loom.symbols.json"
+LOOM_CLOUDKIT_SYMBOLGRAPH="$SYMBOLGRAPH_DIR/LoomCloudKit.symbols.json"
 
 if [[ ! -f "$LOOM_SYMBOLGRAPH" ]]; then
   cat "$DUMP_STDOUT"
@@ -49,6 +50,9 @@ if (( dump_exit != 0 )); then
 fi
 
 cp "$LOOM_SYMBOLGRAPH" "$SYMBOLGRAPH_FILTER_DIR/"
+if [[ -f "$LOOM_CLOUDKIT_SYMBOLGRAPH" ]]; then
+  cp "$LOOM_CLOUDKIT_SYMBOLGRAPH" "$SYMBOLGRAPH_FILTER_DIR/"
+fi
 
 xcrun docc convert \
   "$ROOT_DIR/Sources/Loom/Loom.docc" \

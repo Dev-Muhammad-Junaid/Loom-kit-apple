@@ -68,6 +68,7 @@ public struct LoomCloudKitConfiguration: Sendable {
     ///   - deviceRecordType: Record type for devices. Defaults to "LoomDevice".
     ///   - peerRecordType: Record type for peers. Defaults to "LoomPeer".
     ///   - peerZoneName: Zone name for peer records. Defaults to "LoomPeerZone".
+    ///   - participantIdentityRecordType: Record type used for participant identity-key metadata.
     ///   - shareTitle: Title for sharing UI. Defaults to "Peer Access".
     ///   - deviceIDKey: UserDefaults key for device ID. Defaults to "com.loom.deviceID".
     ///   - shareParticipantCacheTTL: Cache TTL in seconds. Defaults to 300 (5 minutes).

@@ -1,40 +1,79 @@
 # Getting Started
 
-Build a `LoomNode`, advertise your local device, discover peers, then wrap an `NWConnection` in a `LoomSession` once you decide to connect.
+Use this guide to get a real Loom integration off the ground. The short version is:
 
-## Create A Node
+1. create an app-owned `LoomNode`
+2. publish an app-owned `LoomPeerAdvertisement`
+3. discover peers
+4. connect with `NWConnection`
+5. keep your protocol, approval UX, and product policy above Loom
+
+That is the same boundary `MirageKit` uses. Its host and client services both own a ``LoomNode``, but the handshake schema, stream model, CloudKit policy, and UI all live above Loom.
+
+## Create an app-owned node
+
+Start by choosing product defaults that belong to your app, not to Loom:
+
+- a Bonjour service type
+- whether peer-to-peer browsing is allowed
+- how you persist a stable device ID
+- which trust provider, if any, should be injected
 
 ```swift
 import Loom
 
+let configuration = LoomNetworkConfiguration(
+    serviceType: "_myapp._tcp",
+    enablePeerToPeer: true
+)
+
 let node = LoomNode(
-    configuration: LoomNetworkConfiguration(
-        serviceType: "_myapp._tcp",
-        enablePeerToPeer: true
-    ),
+    configuration: configuration,
     identityManager: LoomIdentityManager.shared
 )
 ```
 
-`LoomNode` is intentionally small. It is the composition root for discovery, identity, and trust dependencies.
+`LoomNode` is intentionally small. Treat it as the networking composition root for one runtime surface in your app.
 
-## Advertise
+`MirageKit` follows this pattern directly: its host service and client service each own a node, override Loom's default service type, and keep the rest of their product state above the package.
+
+## Build a product advertisement
+
+`LoomPeerAdvertisement` is where you publish peer identity plus app-specific capability hints.
+
+Keep Loom-owned fields for transport-wide identity:
+
+- `deviceID`
+- `identityKeyID`
+- `deviceType`
+- optional presentation hints like `modelIdentifier`, `iconName`, and `machineFamily`
+
+Keep product semantics in namespaced metadata keys:
 
 ```swift
 import Foundation
+import Loom
 
+let deviceID = loadOrCreateStableDeviceID()
 let identity = try LoomIdentityManager.shared.currentIdentity()
 
 let advertisement = LoomPeerAdvertisement(
-    deviceID: UUID(),
+    deviceID: deviceID,
     identityKeyID: identity.keyID,
     deviceType: .mac,
     metadata: [
-        "myapp.role": "builder",
-        "myapp.version": "1",
+        "myapp.protocol": "1",
+        "myapp.role": "host",
+        "myapp.max-streams": "4",
     ]
 )
+```
 
+`MirageKit` does exactly this. It keeps transport identity in the base advertisement and publishes stream capabilities like `mirage.max-streams` and codec support through namespaced metadata helpers.
+
+## Advertise and accept sessions
+
+```swift
 let port = try await node.startAdvertising(
     serviceName: "My Mac",
     advertisement: advertisement
@@ -45,7 +84,9 @@ let port = try await node.startAdvertising(
 print("Advertising on port \\(port)")
 ```
 
-## Discover
+`LoomSession` is a thin wrapper around the accepted `NWConnection`. Start it on the queue you use for your networking runtime, then hand control to your own handshake or message layer.
+
+## Discover peers
 
 ```swift
 let discovery = node.makeDiscovery()
@@ -59,7 +100,9 @@ discovery.onPeersChanged = { peers in
 discovery.startDiscovery()
 ```
 
-## Connect
+Discovery only tells you that another peer exists and provides its `NWEndpoint` plus advertisement payload. It does not decide whether the peer is trusted or compatible with your product protocol.
+
+## Connect and wrap the session
 
 ```swift
 import Network
@@ -74,6 +117,21 @@ session.setStateUpdateHandler { state in
 session.start(queue: .main)
 ```
 
-## Extend Above Loom
+After that point, your app owns the rest:
 
-Loom should stop at the networking boundary. Keep product-specific protocols, message schemas, CloudKit naming, and UI semantics in the package or app that depends on Loom.
+- protocol negotiation
+- message framing
+- approval UI
+- reconnection policy
+- stream, document, or UI semantics
+
+That split is the main thing to get right. If a type starts carrying app-specific naming, product roles, or CloudKit record assumptions, it probably belongs above Loom.
+
+## Next steps
+
+- <doc:LoomTutorials> is the step-by-step path through host, client, handshake, diagnostics, testing, and CloudKit lifecycle work.
+- <doc:ModelYourIntegrationBoundary> explains the service-layer pattern Mirage uses around Loom.
+- <doc:DesignYourPeerAdvertisement> shows how to evolve advertisement metadata without leaking product logic into Loom.
+- <doc:AddTrustAndApproval> covers trust evaluation and manual approval flows.
+- <doc:SharePeersWithCloudKit> covers the `LoomCloudKit` product and how to layer CloudKit-backed peer sharing on top of Loom.
+- <doc:AddRemoteReachabilityAndBootstrap> covers remote signaling, STUN, Wake-on-LAN, and bootstrap control.

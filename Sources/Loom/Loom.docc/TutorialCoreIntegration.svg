@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420">
+  <rect width="900" height="420" fill="#f6f1e7"/>
+  <rect x="70" y="80" width="250" height="130" rx="24" fill="#d7e4d2"/>
+  <rect x="580" y="80" width="250" height="130" rx="24" fill="#d8e6f2"/>
+  <rect x="280" y="260" width="340" height="96" rx="24" fill="#f0d9b5"/>
+  <text x="195" y="145" font-family="Helvetica, Arial, sans-serif" font-size="34" text-anchor="middle" fill="#223">Host Service</text>
+  <text x="705" y="145" font-family="Helvetica, Arial, sans-serif" font-size="34" text-anchor="middle" fill="#223">Client Service</text>
+  <text x="450" y="318" font-family="Helvetica, Arial, sans-serif" font-size="34" text-anchor="middle" fill="#223">Loom</text>
+  <path d="M195 210 L360 260" stroke="#223" stroke-width="8" fill="none"/>
+  <path d="M705 210 L540 260" stroke="#223" stroke-width="8" fill="none"/>
+</svg>

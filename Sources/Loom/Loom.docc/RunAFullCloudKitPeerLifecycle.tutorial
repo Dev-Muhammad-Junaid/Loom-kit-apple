@@ -1,0 +1,79 @@
+@Tutorial(time: 35) {
+    @Intro(title: "Run a Full CloudKit Peer Lifecycle") {
+        In this tutorial, you will initialize the `LoomCloudKit` stack, register the current identity, publish a peer record, create or accept sharing access, fetch visible peers, and feed CloudKit-backed trust information back into your Loom runtime.
+
+        The goal is not to replace local discovery. The goal is to add an app-owned peer directory and trust layer that can outlive a local Bonjour session.
+    }
+
+    @Section(title: "Initialize CloudKit and register identity") {
+        @ContentAndMedia {
+            Start with one app-owned CloudKit manager and initialize it early enough that the rest of the runtime can query availability.
+        }
+
+        @Steps {
+            @Step {
+                Create a CloudKit runtime with app-owned naming for the container, record types, share title, and device ID storage key.
+                @Code(name: "CloudKit Runtime Structure", file: RunAFullCloudKitPeerLifecycle-Runtime.swift)
+                Record naming is product policy, not Loom policy, so make it explicit up front.
+            }
+
+            @Step {
+                Initialize the manager, then register the current Loom identity key and set up the share manager.
+                @Code(name: "Initialize and Register Identity", file: RunAFullCloudKitPeerLifecycle-Initialize.swift)
+                The local Loom integration should continue working even when CloudKit is unavailable, so treat availability as optional runtime state.
+            }
+
+            @Step {
+                Make the runtime tolerant of signed-out iCloud, container misconfiguration, temporary account unavailability, and an empty share graph.
+            }
+        }
+    }
+
+    @Section(title: "Publish and share the peer record") {
+        @ContentAndMedia {
+            The host-side CloudKit record should carry the same identity and reachability story your runtime already knows about: advertisement, identity key, remote access flag, and optional bootstrap metadata.
+        }
+
+        @Steps {
+            @Step {
+                Publish the peer record after the host has enough information to advertise itself coherently.
+                @Code(name: "Publish the Peer Record", file: RunAFullCloudKitPeerLifecycle-PublishPeer.swift)
+                This keeps the CloudKit directory aligned with the host's real transport and trust surface.
+            }
+
+            @Step {
+                Create a share when the user wants to grant access, and accept inbound share metadata on the receiving side when access is granted externally.
+                @Code(name: "Create and Accept Shares", file: RunAFullCloudKitPeerLifecycle-Shares.swift)
+                Refresh participant state after membership changes so trust decisions do not lag behind accepted access.
+            }
+
+            @Step {
+                Keep the peer record fresh while the host is active by updating last-seen data from the same runtime paths that already know the host is alive.
+            }
+        }
+    }
+
+    @Section(title: "Fetch peers and feed CloudKit into trust") {
+        @ContentAndMedia {
+            Once peers are published and shared, the browser side can fetch visible peers and use CloudKit-backed trust to reduce manual approval noise.
+        }
+
+        @Steps {
+            @Step {
+                Fetch own and shared peers for app-owned UI and device selection.
+                @Code(name: "Fetch Visible Peers", file: RunAFullCloudKitPeerLifecycle-FetchPeers.swift)
+                Each CloudKit peer snapshot already includes decoded advertisement data plus remote and bootstrap hints, which makes it useful for a browser or picker.
+            }
+
+            @Step {
+                Attach a CloudKit-backed trust provider to the Loom runtime so same-account and shared peers can auto-trust when your product wants that behavior.
+                @Code(name: "CloudKit-Backed Trust", file: RunAFullCloudKitPeerLifecycle-TrustProvider.swift)
+                CloudKit should become another trust input, not the only trust mechanism your app has.
+            }
+
+            @Step {
+                Refresh the participant cache and refetch peers after share changes so the browser UI and approval policy remain consistent with the current sharing graph.
+            }
+        }
+    }
+}

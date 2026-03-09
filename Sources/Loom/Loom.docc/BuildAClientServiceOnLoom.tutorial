@@ -1,0 +1,77 @@
+@Tutorial(time: 30) {
+    @Intro(title: "Build a Client Service on Loom") {
+        In this tutorial, you will build the client-side runtime that owns discovery, tracks candidate peers, connects to a selected peer, and hands the resulting `LoomSession` into your own protocol layer.
+
+        The client should mirror the host structurally: use Loom for discovery and transport, but keep product state and reconnect policy above the package.
+    }
+
+    @Section(title: "Model the client runtime") {
+        @ContentAndMedia {
+            A Loom client is usually a long-lived app-owned service. It should own peer discovery state and connection state rather than scattering those responsibilities across views or controllers.
+        }
+
+        @Steps {
+            @Step {
+                Create a client service with one node, one discovery object, and explicit connection state.
+                @Code(name: "MyClientService", file: BuildAClientServiceOnLoom-MyClientService.swift)
+                Keeping browsing and connection state in one place makes the runtime easier to reason about and far easier to instrument.
+            }
+
+            @Step {
+                Let the client service own the peer list, the selected peer, and any reconnect policy so those decisions do not get buried inside view code.
+            }
+
+            @Step {
+                Decide how the client will filter peers before connect so incompatible advertisements never enter the handshake path in the first place.
+            }
+        }
+    }
+
+    @Section(title: "Browse and select peers") {
+        @ContentAndMedia {
+            Discovery is just the candidate-gathering phase. Treat it as a stream of peer snapshots and keep selection logic explicit.
+        }
+
+        @Steps {
+            @Step {
+                Start discovery and capture peer updates into the client service.
+                @Code(name: "Browse for Peers", file: BuildAClientServiceOnLoom-BrowsePeers.swift)
+                The service should treat discovery as input and decide how those peers become visible to the rest of the app.
+            }
+
+            @Step {
+                Centralize peer filtering so protocol-version and role checks stay testable and do not spread across the UI.
+                @Code(name: "Filter Compatible Peers", file: BuildAClientServiceOnLoom-FilterPeers.swift)
+                MirageKit follows the same approach conceptually: discovery finds peers, but product-owned compatibility rules decide which peers are worth attempting.
+            }
+
+            @Step {
+                Make peer selection an explicit decision point so the runtime can support UI-driven selection, remembered peers, policy filtering, and retry on a different peer after failure.
+            }
+        }
+    }
+
+    @Section(title: "Connect and hand off to your protocol layer") {
+        @ContentAndMedia {
+            Once the client chooses a peer, Loom's job is to establish the raw transport. Your client service owns everything above that.
+        }
+
+        @Steps {
+            @Step {
+                Connect using the discovered endpoint, wrap the `NWConnection` in a `LoomSession`, and hand the session to your client handshake.
+                @Code(name: "Connect to a Peer", file: BuildAClientServiceOnLoom-Connect.swift)
+                Preserve anything discovery told you about the selected peer, such as the expected `identityKeyID`, so the handshake can verify that expectation.
+            }
+
+            @Step {
+                Keep disconnect and reconnect policy explicit rather than hiding it inside state callbacks.
+                @Code(name: "Disconnect Cleanly", file: BuildAClientServiceOnLoom-Disconnect.swift)
+                Reconnect logic becomes much easier to reason about when the client service owns it directly.
+            }
+
+            @Step {
+                Once the client can browse and connect, the next layer is a signed handshake that turns a raw session into an authenticated peer relationship.
+            }
+        }
+    }
+}

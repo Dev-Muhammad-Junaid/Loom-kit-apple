@@ -1,0 +1,79 @@
+@Tutorial(time: 25) {
+    @Intro(title: "Add Diagnostics and Instrumentation") {
+        In this tutorial, you will register diagnostics sinks, add runtime context providers, and emit instrumentation steps so a Loom-powered service can explain what it is doing when something fails.
+
+        Once Loom is inside a real host or client runtime, diagnostics and instrumentation are what make transport and trust bugs debuggable.
+    }
+
+    @Section(title: "Register sinks for logs, errors, and step events") {
+        @ContentAndMedia {
+            Loom intentionally keeps diagnostics and instrumentation open-ended. Your app chooses the sink implementation and decides where the events should go.
+        }
+
+        @Steps {
+            @Step {
+                Create sink types for diagnostics and instrumentation that can receive events asynchronously.
+                @Code(name: "Diagnostics and Step Sinks", file: AddDiagnosticsAndInstrumentation-Sinks.swift)
+                Keep the sink implementation simple at first; the important part is that your runtime has a place to send structured events.
+            }
+
+            @Step {
+                Register the sinks during service startup and retain the returned tokens if you plan to remove them later.
+                @Code(name: "Register and Remove Sink Tokens", file: AddDiagnosticsAndInstrumentation-RegisterSinks.swift)
+                Treat these registrations as part of runtime startup rather than as ad hoc debug helpers.
+            }
+
+            @Step {
+                Use product-owned `LoomLogCategory` values when Loom's built-in categories are not specific enough for your runtime.
+            }
+        }
+    }
+
+    @Section(title: "Add context providers") {
+        @ContentAndMedia {
+            Context providers let diagnostics snapshots describe the current runtime state, not just the event that happened. That is valuable when failures depend on a specific phase or toggle.
+        }
+
+        @Steps {
+            @Step {
+                Register a context provider from the service that owns the connection state.
+                @Code(name: "Register a Context Provider", file: AddDiagnosticsAndInstrumentation-ContextProvider.swift)
+                Good context keys are small, stable, and cheap to compute, such as connection state, active peer count, transport mode, or whether approval is pending.
+            }
+
+            @Step {
+                Keep context free of large payloads and privacy-sensitive data so snapshots are safe to inspect and export.
+            }
+
+            @Step {
+                Snapshot context when you need an aggregate runtime view.
+                @Code(name: "Snapshot Runtime Context", file: AddDiagnosticsAndInstrumentation-SnapshotContext.swift)
+                This is useful for bug reports and app-owned support flows.
+            }
+        }
+    }
+
+    @Section(title: "Emit meaningful failures and timeline events") {
+        @ContentAndMedia {
+            Diagnostics answer what failed. Instrumentation answers what the runtime was trying to do. Use both.
+        }
+
+        @Steps {
+            @Step {
+                Report structured errors through `LoomDiagnostics.report` or `LoomDiagnostics.run` so failures keep their metadata and can still be rethrown.
+                @Code(name: "Report Errors and Wrap Operations", file: AddDiagnosticsAndInstrumentation-ReportAndRun.swift)
+                This preserves error domain and code without forcing every call site to build its own event objects.
+            }
+
+            @Step {
+                Emit app-owned `LoomStepEvent` values around state transitions that matter, such as discovery start, connection request, or handshake verification.
+                @Code(name: "Emit Step Events", file: AddDiagnosticsAndInstrumentation-StepEvents.swift)
+                Keep the step names specific enough to reconstruct the lifecycle without flooding the sink with low-signal micro-events.
+            }
+
+            @Step {
+                Once the runtime emits useful observability data, lock it down with tests so future refactors cannot silently break your signal path.
+            }
+        }
+    }
+}

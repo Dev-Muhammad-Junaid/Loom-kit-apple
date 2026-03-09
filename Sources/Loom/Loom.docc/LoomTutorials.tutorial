@@ -1,0 +1,34 @@
+@Tutorials(name: "Loom Tutorials") {
+    @Intro(title: "Build Real Loom Integrations") {
+        These tutorials walk through the service-layer patterns that real apps need on top of Loom.
+
+        Start here if you want more than API reference: host and client runtime structure, signed handshakes, diagnostics, testing, and a full CloudKit-backed peer lifecycle.
+    }
+
+    @Chapter(name: "Core Integration") {
+        Build the app-owned host and client services that sit above Loom, then define a signed handshake that turns raw sessions into trustworthy peers.
+
+        @Image(source: "TutorialCoreIntegration.svg", alt: "Diagram of host and client services layered above Loom.")
+
+        @TutorialReference(tutorial: "doc:BuildAHostServiceOnLoom")
+        @TutorialReference(tutorial: "doc:BuildAClientServiceOnLoom")
+        @TutorialReference(tutorial: "doc:LayerASignedHandshakeAboveLoom")
+    }
+
+    @Chapter(name: "Operability") {
+        Add the runtime visibility and tests you need before a Loom integration is maintainable in a real product.
+
+        @Image(source: "TutorialOperability.svg", alt: "Diagram of diagnostics, instrumentation, and tests around a Loom runtime.")
+
+        @TutorialReference(tutorial: "doc:AddDiagnosticsAndInstrumentation")
+        @TutorialReference(tutorial: "doc:TestALoomIntegration")
+    }
+
+    @Chapter(name: "CloudKit Lifecycle") {
+        Use the `LoomCloudKit` product to register peers, share access, fetch shared peers, and feed CloudKit trust data back into the runtime.
+
+        @Image(source: "TutorialCloudKitLifecycle.svg", alt: "Diagram of peer publication, sharing, and trust in LoomCloudKit.")
+
+        @TutorialReference(tutorial: "doc:RunAFullCloudKitPeerLifecycle")
+    }
+}

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420">
+  <rect width="900" height="420" fill="#f4efe6"/>
+  <rect x="260" y="150" width="380" height="120" rx="24" fill="#d7e4d2"/>
+  <rect x="90" y="70" width="220" height="90" rx="20" fill="#f0d9b5"/>
+  <rect x="590" y="70" width="220" height="90" rx="20" fill="#d8e6f2"/>
+  <rect x="340" y="300" width="220" height="70" rx="18" fill="#e7d7ed"/>
+  <text x="450" y="222" font-family="Helvetica, Arial, sans-serif" font-size="34" text-anchor="middle" fill="#223">Runtime</text>
+  <text x="200" y="126" font-family="Helvetica, Arial, sans-serif" font-size="28" text-anchor="middle" fill="#223">Diagnostics</text>
+  <text x="700" y="126" font-family="Helvetica, Arial, sans-serif" font-size="28" text-anchor="middle" fill="#223">Instrumentation</text>
+  <text x="450" y="345" font-family="Helvetica, Arial, sans-serif" font-size="28" text-anchor="middle" fill="#223">Tests</text>
+  <path d="M310 150 L340 170" stroke="#223" stroke-width="8" fill="none"/>
+  <path d="M590 150 L560 170" stroke="#223" stroke-width="8" fill="none"/>
+  <path d="M450 300 L450 270" stroke="#223" stroke-width="8" fill="none"/>
+</svg>

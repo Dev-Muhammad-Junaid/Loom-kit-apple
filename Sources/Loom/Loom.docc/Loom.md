@@ -6,6 +6,15 @@ Loom is a product-agnostic networking package for Apple platforms that handles d
 
 Use Loom when your app needs to find another Apple device, decide whether to trust it, and establish a session without baking product-specific assumptions into the transport layer.
 
+The important architectural choice is that Loom stops at the networking boundary. Real apps still need to decide:
+
+- which Bonjour service type to advertise
+- how to shape peer metadata
+- how trust decisions map to product policy
+- whether CloudKit, remote signaling, or bootstrap recovery belong in the product
+
+`MirageKit` is a good example of this split. It owns the handshake schema, stream semantics, CloudKit record lifecycle, and UI policy, while Loom stays focused on discovery, identity, trust primitives, and transport helpers.
+
 Loom owns the peer relationship and connectivity infrastructure:
 
 - discovery over Bonjour and peer-to-peer transports
@@ -21,7 +30,13 @@ Your app still owns payload schemas, user experience, and product policy.
 
 ### Essentials
 
+- <doc:LoomTutorials>
 - <doc:GettingStarted>
+- <doc:ModelYourIntegrationBoundary>
+- <doc:DesignYourPeerAdvertisement>
+- <doc:AddTrustAndApproval>
+- <doc:SharePeersWithCloudKit>
+- <doc:AddRemoteReachabilityAndBootstrap>
 - ``LoomNode``
 - ``LoomSession``
 - ``LoomPeer``

@@ -39,6 +39,7 @@ public struct LoomRelayConfiguration: Sendable {
     ///   - baseURL: Worker base URL used for all signaling endpoints.
     ///   - requestTimeout: Per-request URLSession timeout in seconds.
     ///   - appAuthentication: App-level authentication material.
+    ///   - headerPrefix: Lowercased HTTP header prefix used for signed request metadata.
     public init(
         baseURL: URL,
         requestTimeout: TimeInterval = 5,

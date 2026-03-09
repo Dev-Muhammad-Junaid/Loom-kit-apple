@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420">
+  <rect width="900" height="420" fill="#f6f2ea"/>
+  <rect x="80" y="150" width="220" height="110" rx="22" fill="#d7e4d2"/>
+  <rect x="340" y="90" width="220" height="110" rx="22" fill="#d8e6f2"/>
+  <rect x="340" y="220" width="220" height="110" rx="22" fill="#f0d9b5"/>
+  <rect x="600" y="150" width="220" height="110" rx="22" fill="#e7d7ed"/>
+  <text x="190" y="214" font-family="Helvetica, Arial, sans-serif" font-size="30" text-anchor="middle" fill="#223">Peer</text>
+  <text x="450" y="156" font-family="Helvetica, Arial, sans-serif" font-size="26" text-anchor="middle" fill="#223">CloudKit</text>
+  <text x="450" y="186" font-family="Helvetica, Arial, sans-serif" font-size="26" text-anchor="middle" fill="#223">Records</text>
+  <text x="450" y="286" font-family="Helvetica, Arial, sans-serif" font-size="26" text-anchor="middle" fill="#223">Shares</text>
+  <text x="710" y="214" font-family="Helvetica, Arial, sans-serif" font-size="30" text-anchor="middle" fill="#223">Trust</text>
+  <path d="M300 205 L340 145" stroke="#223" stroke-width="8" fill="none"/>
+  <path d="M300 205 L340 275" stroke="#223" stroke-width="8" fill="none"/>
+  <path d="M560 145 L600 205" stroke="#223" stroke-width="8" fill="none"/>
+  <path d="M560 275 L600 205" stroke="#223" stroke-width="8" fill="none"/>
+</svg>
