@@ -248,8 +248,45 @@ private final class LoomLocalPTYHostedSession: LoomShellHostedSession, @unchecke
         return status
     }
 
-    private static func resolvedShellPath(environment: [String: String]) -> String {
+    private struct LoginUserContext {
+        let username: String
+        let homeDirectory: String
+        let shellPath: String
+    }
+
+    private static func currentLoginUserContext() -> LoginUserContext? {
+        let configuredBufferSize = sysconf(Int32(_SC_GETPW_R_SIZE_MAX))
+        let bufferSize = max(configuredBufferSize > 0 ? Int(configuredBufferSize) : 0, 4 * 1024)
+        let buffer = UnsafeMutablePointer<CChar>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+
+        var passwdEntry = passwd()
+        var result: UnsafeMutablePointer<passwd>? = nil
+        let status = getpwuid_r(getuid(), &passwdEntry, buffer, bufferSize, &result)
+        guard status == 0, let record = result else {
+            return nil
+        }
+
+        let username = String(cString: record.pointee.pw_name)
+        let homeDirectory = String(cString: record.pointee.pw_dir)
+        let shellPath = String(cString: record.pointee.pw_shell)
+
+        return LoginUserContext(
+            username: username,
+            homeDirectory: homeDirectory,
+            shellPath: shellPath
+        )
+    }
+
+    private static func resolvedShellPath(
+        environment: [String: String],
+        loginUser: LoginUserContext?
+    ) -> String {
         if let shell = environment["SHELL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !shell.isEmpty {
+            return shell
+        }
+        if let shell = loginUser?.shellPath.trimmingCharacters(in: .whitespacesAndNewlines),
            !shell.isEmpty {
             return shell
         }
@@ -268,13 +305,50 @@ private final class LoomLocalPTYHostedSession: LoomShellHostedSession, @unchecke
         return ["-il"]
     }
 
-    private static func environment(for request: LoomShellSessionRequest) -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
+    private static func environment(
+        for request: LoomShellSessionRequest,
+        loginUser: LoginUserContext?,
+        shellPath: String
+    ) -> [String: String] {
+        let inheritedEnvironment = ProcessInfo.processInfo.environment
+        var environment = inheritedEnvironment.reduce(into: [String: String]()) { partialResult, element in
+            let (key, value) = element
+            if key == "PATH" || key == "TMPDIR" || key == "SSH_AUTH_SOCK" || key == "__CF_USER_TEXT_ENCODING" ||
+                key == "LANG" || key.hasPrefix("LC_") {
+                partialResult[key] = value
+            }
+        }
+
+        if let loginUser {
+            environment["HOME"] = loginUser.homeDirectory
+            environment["USER"] = loginUser.username
+            environment["LOGNAME"] = loginUser.username
+        }
+        environment["SHELL"] = shellPath
         environment.merge(request.environment, uniquingKeysWith: { _, new in new })
         environment["TERM"] = request.terminalType
         environment["COLUMNS"] = String(request.columns)
         environment["LINES"] = String(request.rows)
         return environment
+    }
+
+    private static func workingDirectory(
+        for request: LoomShellSessionRequest,
+        loginUser: LoginUserContext?
+    ) -> String? {
+        if let workingDirectory = request.workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !workingDirectory.isEmpty {
+            return workingDirectory
+        }
+        if let homeDirectory = request.environment["HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !homeDirectory.isEmpty {
+            return homeDirectory
+        }
+        if let homeDirectory = loginUser?.homeDirectory.trimmingCharacters(in: .whitespacesAndNewlines),
+           !homeDirectory.isEmpty {
+            return homeDirectory
+        }
+        return nil
     }
 
     private static func setNonBlocking(_ fileDescriptor: Int32) throws {
@@ -309,17 +383,29 @@ private final class LoomLocalPTYHostedSession: LoomShellHostedSession, @unchecke
         request: LoomShellSessionRequest,
         initialWindowSize: inout winsize
     ) throws -> SpawnedShellProcess {
-        let shellPath = resolvedShellPath(environment: request.environment)
+        let loginUser = currentLoginUserContext()
+        let shellPath = resolvedShellPath(
+            environment: request.environment,
+            loginUser: loginUser
+        )
         let arguments = [shellPath] + arguments(for: request)
-        let environmentStrings = environment(for: request).map { key, value in
+        let environmentStrings = environment(
+            for: request,
+            loginUser: loginUser,
+            shellPath: shellPath
+        ).map { key, value in
             "\(key)=\(value)"
         }
+        let workingDirectory = workingDirectory(
+            for: request,
+            loginUser: loginUser
+        )
 
         // Keep the child-side PTY/session setup in C so no Swift runtime code runs between fork and exec.
         return try withCString(shellPath) { shellPathPointer in
             try withCStringArray(arguments) { argumentPointers in
                 try withCStringArray(environmentStrings) { environmentPointers in
-                    try withOptionalCString(request.workingDirectory) { workingDirectoryPointer in
+                    try withOptionalCString(workingDirectory) { workingDirectoryPointer in
                         var masterFileDescriptor: Int32 = -1
                         let pid = loom_shell_forkpty_spawn(
                             &masterFileDescriptor,

@@ -383,7 +383,7 @@ struct LoomShellTests {
         let host = LoomLocalShellHost()
         let hostedSession = try await host.startSession(
             request: LoomShellSessionRequest(
-                command: #"print -r -- "__loom_flags__:$options[login]:$options[interactive]"; exit 0"#,
+                command: #"print -r -- "__loom_flags__:$options[login]:$options[interactive]:$options[monitor]"; print -r -- "__loom_home__:$HOME"; pwd; exit 0"#,
                 environment: ["SHELL": "/bin/zsh"],
                 terminalType: "xterm-256color",
                 columns: 80,
@@ -409,9 +409,13 @@ struct LoomShellTests {
                 partialResult += String(decoding: data, as: UTF8.self)
             }
         }
+        let normalizedOutput = output.replacingOccurrences(of: "\r\n", with: "\n")
 
-        #expect(output.contains("__loom_flags__:on:on"))
-        #expect(!output.contains("failed to claim foreground terminal"))
+        #expect(normalizedOutput.contains("__loom_flags__:on:on:on"))
+        #expect(normalizedOutput.contains("__loom_home__:\(NSHomeDirectory())"))
+        #expect(normalizedOutput.contains("\n\(NSHomeDirectory())\n"))
+        #expect(!normalizedOutput.contains("can't set tty pgrp"))
+        #expect(!normalizedOutput.contains("failed to claim foreground terminal"))
         #expect(events.contains(where: { event in
             if case let .exit(exit) = event {
                 return exit.exitCode == 0
