@@ -112,7 +112,7 @@ Then add the product you want to your target:
     name: "MyApp",
     dependencies: [
         .product(name: "Loom", package: "Loom"),
-        // Add this to build a terminal or SSH app on top of Loom:
+        // Add this if you want the optional terminal/session layer:
         // .product(name: "LoomShell", package: "Loom"),
         // Add this too if you want CloudKit-backed peer sharing or trust:
         // .product(name: "LoomCloudKit", package: "Loom"),
@@ -234,7 +234,6 @@ If you want the deeper material, go to the docs:
 
 - [Loom Documentation](https://ethanlipnik.github.io/Loom/documentation/loom/)
 - [LoomShell Documentation](https://ethanlipnik.github.io/Loom/documentation/loomshell/)
-- [Build A Shell App On Loom](https://ethanlipnik.github.io/Loom/documentation/loomshell/buildashellapponloom/)
 - [Architecture notes](Architecture.md)
 
 ## Development

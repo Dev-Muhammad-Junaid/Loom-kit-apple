@@ -5,7 +5,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_ROOT="${TMPDIR:-/tmp}"
 TMP_DIR="$(mktemp -d "$TMP_ROOT/loom-docc.XXXXXX")"
-SYMBOLGRAPH_FILTER_DIR="$TMP_DIR/symbolgraph"
+LOOM_SYMBOLGRAPH_DIR="$TMP_DIR/loom-symbolgraph"
+LOOM_SHELL_SYMBOLGRAPH_DIR="$TMP_DIR/loomshell-symbolgraph"
+LOOM_ARCHIVE="$TMP_DIR/Loom.doccarchive"
+LOOM_SHELL_ARCHIVE="$TMP_DIR/LoomShell.doccarchive"
+LOOM_STATIC_DIR="$TMP_DIR/loom-static"
+LOOM_SHELL_STATIC_DIR="$TMP_DIR/loomshell-static"
 DUMP_STDOUT="$TMP_DIR/dump-symbol-graph.stdout"
 DUMP_STDERR="$TMP_DIR/dump-symbol-graph.stderr"
 OUTPUT_PATH="$ROOT_DIR/docs"
@@ -15,7 +20,7 @@ HOSTING_BASE_PATH="${HOSTING_BASE_PATH#/}"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 rm -rf "$OUTPUT_PATH"
-mkdir -p "$SYMBOLGRAPH_FILTER_DIR"
+mkdir -p "$LOOM_SYMBOLGRAPH_DIR" "$LOOM_SHELL_SYMBOLGRAPH_DIR"
 
 dump_exit=0
 if ! swift package dump-symbol-graph --minimum-access-level public >"$DUMP_STDOUT" 2>"$DUMP_STDERR"; then
@@ -50,12 +55,12 @@ if (( dump_exit != 0 )); then
   fi
 fi
 
-cp "$LOOM_SYMBOLGRAPH" "$SYMBOLGRAPH_FILTER_DIR/"
+cp "$LOOM_SYMBOLGRAPH" "$LOOM_SYMBOLGRAPH_DIR/"
 if [[ -f "$LOOM_CLOUDKIT_SYMBOLGRAPH" ]]; then
-  cp "$LOOM_CLOUDKIT_SYMBOLGRAPH" "$SYMBOLGRAPH_FILTER_DIR/"
+  cp "$LOOM_CLOUDKIT_SYMBOLGRAPH" "$LOOM_SYMBOLGRAPH_DIR/"
 fi
 if [[ -f "$LOOM_SHELL_SYMBOLGRAPH" ]]; then
-  cp "$LOOM_SHELL_SYMBOLGRAPH" "$SYMBOLGRAPH_FILTER_DIR/"
+  cp "$LOOM_SHELL_SYMBOLGRAPH" "$LOOM_SHELL_SYMBOLGRAPH_DIR/"
 else
   cat "$DUMP_STDOUT"
   cat "$DUMP_STDERR" >&2
@@ -63,23 +68,53 @@ else
   exit 1
 fi
 
-convert_catalog() {
-  local catalog_path="$1"
-  local display_name="$2"
-  local bundle_identifier="$3"
+copy_if_exists() {
+  local source_path="$1"
+  local destination_path="$2"
 
-  xcrun docc convert \
-    "$catalog_path" \
-    --additional-symbol-graph-dir "$SYMBOLGRAPH_FILTER_DIR" \
-    --output-dir "$OUTPUT_PATH" \
-    --transform-for-static-hosting \
-    --hosting-base-path "$HOSTING_BASE_PATH" \
-    --fallback-display-name "$display_name" \
-    --fallback-bundle-identifier "$bundle_identifier"
+  if [[ -e "$source_path" ]]; then
+    mkdir -p "$destination_path"
+    rsync -a "$source_path" "$destination_path/"
+  fi
 }
 
-convert_catalog "$ROOT_DIR/Sources/Loom/Loom.docc" Loom loom.Loom
-convert_catalog "$ROOT_DIR/Sources/LoomShell/LoomShell.docc" LoomShell loom.LoomShell
+xcrun docc convert \
+  "$ROOT_DIR/Sources/Loom/Loom.docc" \
+  --additional-symbol-graph-dir "$LOOM_SYMBOLGRAPH_DIR" \
+  --output-dir "$LOOM_ARCHIVE" \
+  --fallback-display-name Loom \
+  --fallback-bundle-identifier loom.Loom \
+  --enable-experimental-external-link-support
+
+# Build LoomShell against Loom as a DocC dependency so its imported Loom symbols
+# resolve externally instead of overwriting Loom's authored landing pages.
+xcrun docc convert \
+  "$ROOT_DIR/Sources/LoomShell/LoomShell.docc" \
+  --additional-symbol-graph-dir "$LOOM_SHELL_SYMBOLGRAPH_DIR" \
+  --dependency "$LOOM_ARCHIVE" \
+  --output-dir "$LOOM_SHELL_ARCHIVE" \
+  --fallback-display-name LoomShell \
+  --fallback-bundle-identifier loom.LoomShell \
+  --enable-experimental-external-link-support
+
+xcrun docc process-archive transform-for-static-hosting \
+  "$LOOM_ARCHIVE" \
+  --output-path "$LOOM_STATIC_DIR" \
+  --hosting-base-path "$HOSTING_BASE_PATH"
+
+xcrun docc process-archive transform-for-static-hosting \
+  "$LOOM_SHELL_ARCHIVE" \
+  --output-path "$LOOM_SHELL_STATIC_DIR" \
+  --hosting-base-path "$HOSTING_BASE_PATH"
+
+rsync -a "$LOOM_STATIC_DIR/" "$OUTPUT_PATH/"
+mkdir -p "$OUTPUT_PATH/data/documentation" "$OUTPUT_PATH/documentation"
+rsync -a "$LOOM_SHELL_STATIC_DIR/data/documentation/loomshell" "$OUTPUT_PATH/data/documentation/"
+rsync -a "$LOOM_SHELL_STATIC_DIR/data/documentation/loomshell.json" "$OUTPUT_PATH/data/documentation/"
+rsync -a "$LOOM_SHELL_STATIC_DIR/documentation/loomshell" "$OUTPUT_PATH/documentation/"
+copy_if_exists "$LOOM_SHELL_STATIC_DIR/downloads/loom.LoomShell" "$OUTPUT_PATH/downloads"
+copy_if_exists "$LOOM_SHELL_STATIC_DIR/images/loom.LoomShell" "$OUTPUT_PATH/images"
+copy_if_exists "$LOOM_SHELL_STATIC_DIR/videos/loom.LoomShell" "$OUTPUT_PATH/videos"
 
 mkdir -p "$OUTPUT_PATH/documentation/loomshell/build-a-shell-app-on-loom"
 cat >"$OUTPUT_PATH/documentation/loomshell/build-a-shell-app-on-loom/index.html" <<'EOF'
