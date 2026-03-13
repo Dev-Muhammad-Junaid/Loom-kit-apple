@@ -106,6 +106,28 @@ struct LoomRemoteSignalingAdvertiseFlowTests {
     }
 
     @MainActor
+    @Test("Presence requires at least one candidate before reporting accepting connections")
+    func presenceRequiresCandidatesForAcceptance() async throws {
+        let (client, requestedPaths, _) = makeClient(responses: [
+            .json(
+                statusCode: 200,
+                body: [
+                    "exists": true,
+                    "remoteEnabled": true,
+                    "hostCandidates": [],
+                ]
+            ),
+        ])
+
+        let presence = try await client.fetchPresence(sessionID: "session-5")
+
+        #expect(requestedPaths() == ["/v1/session/presence"])
+        #expect(presence.exists)
+        #expect(presence.peerCandidates.isEmpty)
+        #expect(!presence.acceptingConnections)
+    }
+
+    @MainActor
     private func makeClient(
         responses: [LoomRemoteSignalingMockResponse]
     ) -> (LoomRelayClient, @Sendable () -> [String], @Sendable () -> [[String: Any]]) {

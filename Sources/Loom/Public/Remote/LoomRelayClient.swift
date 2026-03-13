@@ -369,11 +369,15 @@ public final class LoomRelayClient {
             throw LoomRelayError.invalidPayload
         }
         let exists = object["exists"] as? Bool ?? false
+        let peerCandidates = parseCandidates(object["peerCandidates"] ?? object["hostCandidates"])
+        let acceptingConnections = object["remoteEnabled"] as? Bool ??
+            object["acceptingConnections"] as? Bool ??
+            false
         return LoomRelayPresenceStatus(
             exists: exists,
-            acceptingConnections: object["remoteEnabled"] as? Bool ?? object["acceptingConnections"] as? Bool ?? false,
+            acceptingConnections: acceptingConnections && !peerCandidates.isEmpty,
             advertisement: parseAdvertisementBlob(object["advertisementBlob"]),
-            peerCandidates: parseCandidates(object["peerCandidates"] ?? object["hostCandidates"]),
+            peerCandidates: peerCandidates,
             lockedToParticipantKeyID: object["lockedToParticipantKeyID"] as? String ?? object["lockedToClientKeyID"] as? String,
             expiresAt: dateFromMilliseconds(object["expiresAtMs"]),
             lastPeerSeen: dateFromMilliseconds(object["lastPeerSeenMs"] ?? object["lastHostSeenMs"]),
