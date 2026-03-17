@@ -141,6 +141,11 @@ rsync -a "$LOOM_KIT_STATIC_DIR/documentation/loomkit" "$OUTPUT_PATH/documentatio
 copy_if_exists "$LOOM_KIT_STATIC_DIR/downloads/loom.LoomKit" "$OUTPUT_PATH/downloads"
 copy_if_exists "$LOOM_KIT_STATIC_DIR/images/loom.LoomKit" "$OUTPUT_PATH/images"
 copy_if_exists "$LOOM_KIT_STATIC_DIR/videos/loom.LoomKit" "$OUTPUT_PATH/videos"
+# LoomKit tutorials (DocC serves these under /tutorials/, not /documentation/)
+mkdir -p "$OUTPUT_PATH/tutorials" "$OUTPUT_PATH/data/tutorials"
+copy_if_exists "$LOOM_KIT_STATIC_DIR/tutorials/loomkit" "$OUTPUT_PATH/tutorials"
+copy_if_exists "$LOOM_KIT_STATIC_DIR/data/tutorials/loomkit" "$OUTPUT_PATH/data/tutorials"
+copy_if_exists "$LOOM_KIT_STATIC_DIR/data/tutorials/loomkittutorials.json" "$OUTPUT_PATH/data/tutorials"
 rsync -a "$LOOM_SHELL_STATIC_DIR/data/documentation/loomshell" "$OUTPUT_PATH/data/documentation/"
 rsync -a "$LOOM_SHELL_STATIC_DIR/data/documentation/loomshell.json" "$OUTPUT_PATH/data/documentation/"
 rsync -a "$LOOM_SHELL_STATIC_DIR/documentation/loomshell" "$OUTPUT_PATH/documentation/"
