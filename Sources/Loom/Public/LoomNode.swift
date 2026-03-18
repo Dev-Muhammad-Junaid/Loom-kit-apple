@@ -106,7 +106,8 @@ public final class LoomNode {
         to endpoint: NWEndpoint,
         using transportKind: LoomTransportKind,
         enablePeerToPeer: Bool? = nil,
-        requiredInterfaceType: NWInterface.InterfaceType? = nil
+        requiredInterfaceType: NWInterface.InterfaceType? = nil,
+        requiredLocalPort: UInt16? = nil
     ) throws -> NWConnection {
         let parameters = try LoomTransportParametersFactory.makeParameters(
             for: transportKind,
@@ -114,6 +115,10 @@ public final class LoomNode {
             requiredInterfaceType: requiredInterfaceType,
             quicALPN: configuration.quicALPN
         )
+        if let requiredLocalPort, let port = NWEndpoint.Port(rawValue: requiredLocalPort) {
+            parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.any), port: port)
+            parameters.allowLocalEndpointReuse = true
+        }
         return NWConnection(to: endpoint, using: parameters)
     }
 
@@ -123,13 +128,15 @@ public final class LoomNode {
         hello: LoomSessionHelloRequest,
         enablePeerToPeer: Bool? = nil,
         requiredInterfaceType: NWInterface.InterfaceType? = nil,
+        requiredLocalPort: UInt16? = nil,
         queue: DispatchQueue = .global(qos: .userInitiated)
     ) async throws -> LoomAuthenticatedSession {
         let connection = try makeConnection(
             to: endpoint,
             using: transportKind,
             enablePeerToPeer: enablePeerToPeer,
-            requiredInterfaceType: requiredInterfaceType
+            requiredInterfaceType: requiredInterfaceType,
+            requiredLocalPort: requiredLocalPort
         )
         let identityManager = self.identityManager ?? LoomIdentityManager.shared
         let session = makeAuthenticatedSession(

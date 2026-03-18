@@ -61,6 +61,7 @@ Authenticated Loom sessions also expose transport-facing metadata that higher-le
 
 ### Remote Connectivity
 
+- <doc:BuildASignalingService>
 - ``LoomOverlayDirectory``
 - ``LoomOverlayDirectoryConfiguration``
 - ``LoomOverlaySeed``

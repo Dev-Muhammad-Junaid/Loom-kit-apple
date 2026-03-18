@@ -374,6 +374,26 @@ public final class LoomRemoteSignalingClient {
         )
     }
 
+    /// Lightweight read-only check for whether a client has posted candidates.
+    ///
+    /// This is cheaper than a full heartbeat — it performs a single Durable Object
+    /// storage read with no writes, keeping Worker CPU usage minimal.
+    ///
+    /// - Parameter sessionID: Session identifier to check.
+    /// - Returns: Client candidates if any have been posted.
+    public func checkForClient(sessionID: String) async throws -> [LoomRemoteCandidate] {
+        let (_, data) = try await sendSignedRequest(
+            sessionID: sessionID,
+            method: "GET",
+            path: "/v1/session/check-client",
+            bodyData: nil
+        )
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LoomRemoteSignalingError.invalidPayload
+        }
+        return parseCandidates(object["clientCandidates"])
+    }
+
     /// Fetches remote presence state for a peer session.
     ///
     /// - Parameter sessionID: Session identifier to query.

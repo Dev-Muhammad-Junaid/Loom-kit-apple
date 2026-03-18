@@ -20,15 +20,18 @@ public struct LoomConnectionTarget: Sendable {
     public let source: LoomConnectionTargetSource
     public let transportKind: LoomTransportKind
     public let endpoint: NWEndpoint
+    public let requiredLocalPort: UInt16?
 
     public init(
         source: LoomConnectionTargetSource,
         transportKind: LoomTransportKind,
-        endpoint: NWEndpoint
+        endpoint: NWEndpoint,
+        requiredLocalPort: UInt16? = nil
     ) {
         self.source = source
         self.transportKind = transportKind
         self.endpoint = endpoint
+        self.requiredLocalPort = requiredLocalPort
     }
 }
 
@@ -104,7 +107,8 @@ public final class LoomConnectionCoordinator {
             try await node.connect(
                 to: target.endpoint,
                 using: target.transportKind,
-                hello: hello
+                hello: hello,
+                requiredLocalPort: target.requiredLocalPort
             )
         }
     }
@@ -135,7 +139,8 @@ public final class LoomConnectionCoordinator {
     public func makePlan(
         localPeer: LoomPeer? = nil,
         overlayPeer: LoomPeer? = nil,
-        signalingSessionID: String? = nil
+        signalingSessionID: String? = nil,
+        requiredLocalPort: UInt16? = nil
     ) async throws -> LoomConnectionPlan {
         var targets: [LoomConnectionTarget] = []
 
@@ -164,7 +169,7 @@ public final class LoomConnectionCoordinator {
             let presence = try await signalingClient.fetchPresence(sessionID: signalingSessionID)
             let remoteCandidateTargets = presence.peerCandidates
                 .sorted(by: compareRemoteCandidates(_:_:))
-                .compactMap(Self.target(from:))
+                .compactMap { Self.target(from: $0, requiredLocalPort: requiredLocalPort) }
             targets.append(contentsOf: remoteCandidateTargets)
         }
 
@@ -175,12 +180,14 @@ public final class LoomConnectionCoordinator {
         hello: LoomSessionHelloRequest,
         localPeer: LoomPeer? = nil,
         overlayPeer: LoomPeer? = nil,
-        signalingSessionID: String? = nil
+        signalingSessionID: String? = nil,
+        requiredLocalPort: UInt16? = nil
     ) async throws -> LoomAuthenticatedSession {
         let plan = try await makePlan(
             localPeer: localPeer,
             overlayPeer: overlayPeer,
-            signalingSessionID: signalingSessionID
+            signalingSessionID: signalingSessionID,
+            requiredLocalPort: requiredLocalPort
         )
         guard !plan.targets.isEmpty else {
             throw LoomError.sessionNotFound
@@ -231,7 +238,10 @@ public final class LoomConnectionCoordinator {
         return policy.preferredRemoteTransportOrder.firstIndex(of: transportKind) ?? Int.max
     }
 
-    private static func target(from candidate: LoomRemoteCandidate) -> LoomConnectionTarget? {
+    private static func target(
+        from candidate: LoomRemoteCandidate,
+        requiredLocalPort: UInt16? = nil
+    ) -> LoomConnectionTarget? {
         guard let endpointPort = NWEndpoint.Port(rawValue: candidate.port) else {
             return nil
         }
@@ -243,7 +253,8 @@ public final class LoomConnectionCoordinator {
         return LoomConnectionTarget(
             source: .remoteSignaling,
             transportKind: transportKind,
-            endpoint: .hostPort(host: host, port: endpointPort)
+            endpoint: .hostPort(host: host, port: endpointPort),
+            requiredLocalPort: transportKind == .quic ? requiredLocalPort : nil
         )
     }
 
