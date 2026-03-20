@@ -24,6 +24,14 @@ package actor LoomFramedConnection: LoomSessionTransport {
         try await readFrame(maxBytes: maxBytes)
     }
 
+    package func sendUnreliable(_ data: Data) async throws {
+        try await sendFrame(data)
+    }
+
+    package func receiveUnreliable(maxBytes: Int) async throws -> Data {
+        try await readFrame(maxBytes: maxBytes)
+    }
+
     package func awaitReady() async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let completion = LoomReadyContinuationBox(continuation: continuation)

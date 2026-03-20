@@ -134,6 +134,9 @@ package actor LoomVirtualAppSession: LoomSessionProtocol {
             sendHandler: { [connectionID, sendHandler] data in
                 try await sendHandler(connectionID, id, data)
             },
+            unreliableSendHandler: { [connectionID, sendHandler] data in
+                try await sendHandler(connectionID, id, data)
+            },
             closeHandler: { [connectionID, closeHandler] in
                 try await closeHandler(connectionID, id)
             }

@@ -33,10 +33,8 @@ package struct LoomSessionSecurityContext: Sendable {
     private let dataSendKey: SymmetricKey
     private let dataReceiveKey: SymmetricKey
 
-    private var nextControlSendSequence: UInt64 = 0
-    private var nextControlReceiveSequence: UInt64 = 0
-    private var nextDataSendSequence: UInt64 = 0
-    private var nextDataReceiveSequence: UInt64 = 0
+    private static let nonceSize = 12
+    private static let authTagSize = 16
 
     package init(
         role: LoomSessionRole,
@@ -83,12 +81,14 @@ package struct LoomSessionSecurityContext: Sendable {
         )
     }
 
-    package mutating func seal(
+    /// Encrypt plaintext with a random nonce.
+    /// Returns `[nonce: 12][ciphertext][tag: 16]`.
+    package func seal(
         _ plaintext: Data,
         trafficClass: LoomSessionTrafficClass
     ) throws -> Data {
-        let (key, sequence) = nextSendKeyAndSequence(for: trafficClass)
-        let nonce = try Self.nonce(sequence: sequence)
+        let key = sendKey(for: trafficClass)
+        let nonce = try ChaChaPoly.Nonce(data: Self.randomNonce())
         let aad = Data([trafficClass.rawValue])
         let sealed = try ChaChaPoly.seal(
             plaintext,
@@ -96,22 +96,24 @@ package struct LoomSessionSecurityContext: Sendable {
             nonce: nonce,
             authenticating: aad
         )
-        return sealed.ciphertext + sealed.tag
+        return Data(nonce) + sealed.ciphertext + sealed.tag
     }
 
-    package mutating func open(
-        _ ciphertextAndTag: Data,
+    /// Decrypt payload of the form `[nonce: 12][ciphertext][tag: 16]`.
+    package func open(
+        _ nonceAndCiphertextAndTag: Data,
         trafficClass: LoomSessionTrafficClass
     ) throws -> Data {
-        let authTagLength = 16
-        guard ciphertextAndTag.count >= authTagLength else {
+        guard nonceAndCiphertextAndTag.count >= Self.nonceSize + Self.authTagSize else {
             throw LoomSessionSecurityError.decryptFailed
         }
 
-        let (key, sequence) = nextReceiveKeyAndSequence(for: trafficClass)
-        let nonce = try Self.nonce(sequence: sequence)
-        let ciphertext = ciphertextAndTag.dropLast(authTagLength)
-        let tag = ciphertextAndTag.suffix(authTagLength)
+        let key = receiveKey(for: trafficClass)
+        let nonceData = nonceAndCiphertextAndTag.prefix(Self.nonceSize)
+        let nonce = try ChaChaPoly.Nonce(data: nonceData)
+        let rest = nonceAndCiphertextAndTag.dropFirst(Self.nonceSize)
+        let ciphertext = rest.dropLast(Self.authTagSize)
+        let tag = rest.suffix(Self.authTagSize)
 
         let box = try ChaChaPoly.SealedBox(
             nonce: nonce,
@@ -129,30 +131,26 @@ package struct LoomSessionSecurityContext: Sendable {
         }
     }
 
-    private mutating func nextSendKeyAndSequence(
-        for trafficClass: LoomSessionTrafficClass
-    ) -> (SymmetricKey, UInt64) {
+    private func sendKey(for trafficClass: LoomSessionTrafficClass) -> SymmetricKey {
         switch trafficClass {
-        case .control:
-            defer { nextControlSendSequence &+= 1 }
-            return (controlSendKey, nextControlSendSequence)
-        case .data:
-            defer { nextDataSendSequence &+= 1 }
-            return (dataSendKey, nextDataSendSequence)
+        case .control: controlSendKey
+        case .data: dataSendKey
         }
     }
 
-    private mutating func nextReceiveKeyAndSequence(
-        for trafficClass: LoomSessionTrafficClass
-    ) -> (SymmetricKey, UInt64) {
+    private func receiveKey(for trafficClass: LoomSessionTrafficClass) -> SymmetricKey {
         switch trafficClass {
-        case .control:
-            defer { nextControlReceiveSequence &+= 1 }
-            return (controlReceiveKey, nextControlReceiveSequence)
-        case .data:
-            defer { nextDataReceiveSequence &+= 1 }
-            return (dataReceiveKey, nextDataReceiveSequence)
+        case .control: controlReceiveKey
+        case .data: dataReceiveKey
         }
+    }
+
+    private static func randomNonce() -> Data {
+        var bytes = [UInt8](repeating: 0, count: nonceSize)
+        for i in bytes.indices {
+            bytes[i] = .random(in: .min ... .max)
+        }
+        return Data(bytes)
     }
 
     private static func deriveKey(
@@ -184,15 +182,6 @@ package struct LoomSessionSecurityContext: Sendable {
                 receiverHello: receiverHello
             )
         )
-    }
-
-    private static func nonce(sequence: UInt64) throws -> ChaChaPoly.Nonce {
-        var nonceData = Data(repeating: 0, count: 12)
-        var beSequence = sequence.bigEndian
-        withUnsafeBytes(of: &beSequence) { bytes in
-            nonceData.replaceSubrange(4..<12, with: bytes)
-        }
-        return try ChaChaPoly.Nonce(data: nonceData)
     }
 }
 

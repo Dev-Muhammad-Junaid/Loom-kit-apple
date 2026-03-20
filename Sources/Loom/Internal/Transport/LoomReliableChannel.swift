@@ -37,6 +37,15 @@ package actor LoomReliableChannel: LoomSessionTransport {
     private var deliveryContinuation: AsyncStream<Data>.Continuation?
     private let deliveryStream: AsyncStream<Data>
 
+    private var unreliableDeliveryContinuation: AsyncStream<Data>.Continuation?
+    private let unreliableDeliveryStream: AsyncStream<Data>
+
+    // MARK: - Ordered Delivery
+
+    private var nextDeliverySequence: UInt32 = 0
+    private var hasSetInitialDeliverySequence = false
+    private var pendingDelivery: [UInt32: PendingMessage] = [:]
+
     // MARK: - RTT Estimation
 
     private var smoothedRTT: Double = 0.2
@@ -60,6 +69,9 @@ package actor LoomReliableChannel: LoomSessionTransport {
         let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
         deliveryStream = stream
         deliveryContinuation = continuation
+        let (uStream, uContinuation) = AsyncStream.makeStream(of: Data.self)
+        unreliableDeliveryStream = uStream
+        unreliableDeliveryContinuation = uContinuation
     }
 
     deinit {
@@ -67,6 +79,7 @@ package actor LoomReliableChannel: LoomSessionTransport {
         receiveTask?.cancel()
         ackTask?.cancel()
         deliveryContinuation?.finish()
+        unreliableDeliveryContinuation?.finish()
     }
 
     // MARK: - LoomSessionTransport
@@ -159,13 +172,14 @@ package actor LoomReliableChannel: LoomSessionTransport {
     }
 
     /// Send a message without requiring acknowledgment (fire-and-forget).
+    /// Unreliable packets do not consume reliable sequence numbers and are
+    /// never retransmitted.
     package func sendUnreliable(_ data: Data) async throws {
         guard !isClosed else { return }
 
-        let seq = allocateSequence()
         let header = LoomReliablePacketHeader(
             flags: [],
-            sequence: seq,
+            sequence: 0,
             ackSequence: currentAckSequence(),
             ackBitmap: currentAckBitmap(),
             fragmentIndex: 0,
@@ -176,6 +190,18 @@ package actor LoomReliableChannel: LoomSessionTransport {
         try await sendRaw(header.serialize() + data)
     }
 
+    package func receiveUnreliable(maxBytes: Int) async throws -> Data {
+        for await message in unreliableDeliveryStream {
+            if message.count > maxBytes {
+                throw LoomError.protocolError(
+                    "Received unreliable message exceeds limit: \(message.count) > \(maxBytes)"
+                )
+            }
+            return message
+        }
+        throw LoomError.connectionFailed(CancellationError())
+    }
+
     package func close() {
         guard !isClosed else { return }
         isClosed = true
@@ -184,6 +210,8 @@ package actor LoomReliableChannel: LoomSessionTransport {
         ackTask?.cancel()
         deliveryContinuation?.finish()
         deliveryContinuation = nil
+        unreliableDeliveryContinuation?.finish()
+        unreliableDeliveryContinuation = nil
         connection.cancel()
     }
 
@@ -400,23 +428,33 @@ package actor LoomReliableChannel: LoomSessionTransport {
             return
         }
 
-        // Record this sequence for our outgoing acks
-        recordReceivedSequence(header.sequence)
-
-        if header.flags.contains(.reliable) {
-            needsAck = true
-            scheduleAckIfNeeded()
-        }
-
+        // Validate payload before recording the sequence.  A truncated
+        // packet must NOT advance ACK state — the sender would stop
+        // retransmitting while the ordered-delivery buffer stalls.
         let payloadStart = loomReliableHeaderSize
         let payloadEnd = payloadStart + Int(header.payloadLength)
         guard data.count >= payloadEnd else { return }
         let payload = Data(data[payloadStart..<payloadEnd])
 
+        // Unreliable packets bypass sequence tracking and ordered delivery.
+        guard header.flags.contains(.reliable) else {
+            unreliableDeliveryContinuation?.yield(payload)
+            return
+        }
+
+        // Record this sequence for our outgoing acks
+        recordReceivedSequence(header.sequence)
+        needsAck = true
+        scheduleAckIfNeeded()
+
         if header.flags.contains(.fragment) {
             handleFragment(header: header, payload: payload)
         } else {
-            deliveryContinuation?.yield(payload)
+            bufferForOrderedDelivery(
+                sequence: header.sequence,
+                sequenceSpan: 1,
+                payload: payload
+            )
         }
     }
 
@@ -478,9 +516,48 @@ package actor LoomReliableChannel: LoomSessionTransport {
         assembly.fragments[header.fragmentIndex] = payload
         if assembly.isComplete {
             fragments.removeValue(forKey: key)
-            deliveryContinuation?.yield(assembly.reassemble())
+            bufferForOrderedDelivery(
+                sequence: firstSeq,
+                sequenceSpan: UInt32(header.fragmentCount),
+                payload: assembly.reassemble()
+            )
         } else {
             fragments[key] = assembly
+        }
+    }
+
+    // MARK: - Ordered Delivery
+
+    private struct PendingMessage {
+        let payload: Data
+        let sequenceSpan: UInt32
+    }
+
+    private func bufferForOrderedDelivery(
+        sequence: UInt32,
+        sequenceSpan: UInt32,
+        payload: Data
+    ) {
+        if !hasSetInitialDeliverySequence {
+            hasSetInitialDeliverySequence = true
+            nextDeliverySequence = sequence
+        }
+
+        // Discard messages already delivered (duplicate/retransmit)
+        let diff = Int32(bitPattern: sequence &- nextDeliverySequence)
+        guard diff >= 0 else { return }
+
+        pendingDelivery[sequence] = PendingMessage(
+            payload: payload,
+            sequenceSpan: sequenceSpan
+        )
+        flushDeliveryBuffer()
+    }
+
+    private func flushDeliveryBuffer() {
+        while let message = pendingDelivery.removeValue(forKey: nextDeliverySequence) {
+            deliveryContinuation?.yield(message.payload)
+            nextDeliverySequence &+= message.sequenceSpan
         }
     }
 

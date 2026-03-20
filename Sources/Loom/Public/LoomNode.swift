@@ -135,6 +135,7 @@ public final class LoomNode {
         to endpoint: NWEndpoint,
         using transportKind: LoomTransportKind,
         hello: LoomSessionHelloRequest,
+        encryptionPolicy: LoomSessionEncryptionPolicy = .required,
         enablePeerToPeer: Bool? = nil,
         requiredInterfaceType: NWInterface.InterfaceType? = nil,
         requiredLocalPort: UInt16? = nil,
@@ -158,6 +159,7 @@ public final class LoomNode {
                 localHello: hello,
                 identityManager: identityManager,
                 trustProvider: trustProvider,
+                encryptionPolicy: encryptionPolicy,
                 queue: queue
             )
             return session
@@ -168,6 +170,7 @@ public final class LoomNode {
 
     public func startAuthenticatedAdvertising(
         serviceName: String,
+        encryptionPolicy: LoomSessionEncryptionPolicy = .required,
         helloProvider: @escaping @Sendable () async throws -> LoomSessionHelloRequest,
         onSession: @escaping @Sendable (LoomAuthenticatedSession) -> Void
     ) async throws -> [LoomTransportKind: UInt16] {
@@ -186,7 +189,8 @@ public final class LoomNode {
                         _ = try await session.start(
                             localHello: hello,
                             identityManager: identityManager,
-                            trustProvider: self.trustProvider
+                            trustProvider: self.trustProvider,
+                            encryptionPolicy: encryptionPolicy
                         )
                         onSession(session)
                     } catch {
@@ -236,7 +240,8 @@ public final class LoomNode {
                             _ = try await session.start(
                                 localHello: hello,
                                 identityManager: identityManager,
-                                trustProvider: self.trustProvider
+                                trustProvider: self.trustProvider,
+                                encryptionPolicy: encryptionPolicy
                             )
                             onSession(session)
                         } catch {
@@ -290,7 +295,8 @@ public final class LoomNode {
                         _ = try await session.start(
                             localHello: hello,
                             identityManager: identityManager,
-                            trustProvider: self.trustProvider
+                            trustProvider: self.trustProvider,
+                            encryptionPolicy: encryptionPolicy
                         )
                         onSession(session)
                     } catch {

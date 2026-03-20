@@ -24,19 +24,22 @@ public struct LoomAuthenticatedSessionContext: Sendable, Codable, Equatable {
     public let trustEvaluation: LoomTrustEvaluation
     public let transportKind: LoomTransportKind
     public let negotiatedFeatures: [String]
+    public let sessionEncrypted: Bool
 
     public init(
         peerIdentity: LoomPeerIdentity,
         peerAdvertisement: LoomPeerAdvertisement,
         trustEvaluation: LoomTrustEvaluation,
         transportKind: LoomTransportKind,
-        negotiatedFeatures: [String]
+        negotiatedFeatures: [String],
+        sessionEncrypted: Bool = true
     ) {
         self.peerIdentity = peerIdentity
         self.peerAdvertisement = peerAdvertisement
         self.trustEvaluation = trustEvaluation
         self.transportKind = transportKind
         self.negotiatedFeatures = negotiatedFeatures
+        self.sessionEncrypted = sessionEncrypted
     }
 }
 
@@ -49,17 +52,20 @@ public final class LoomMultiplexedStream: @unchecked Sendable, Hashable {
     private let lock = NSLock()
     private var continuation: AsyncStream<Data>.Continuation?
     private let sendHandler: @Sendable (Data) async throws -> Void
+    private let unreliableSendHandler: @Sendable (Data) async throws -> Void
     private let closeHandler: @Sendable () async throws -> Void
 
     package init(
         id: UInt16,
         label: String?,
         sendHandler: @escaping @Sendable (Data) async throws -> Void,
+        unreliableSendHandler: @escaping @Sendable (Data) async throws -> Void,
         closeHandler: @escaping @Sendable () async throws -> Void
     ) {
         self.id = id
         self.label = label
         self.sendHandler = sendHandler
+        self.unreliableSendHandler = unreliableSendHandler
         self.closeHandler = closeHandler
         let (stream, continuation) = AsyncStream.makeStream(of: Data.self)
         incomingBytes = stream
@@ -68,6 +74,10 @@ public final class LoomMultiplexedStream: @unchecked Sendable, Hashable {
 
     public func send(_ data: Data) async throws {
         try await sendHandler(data)
+    }
+
+    public func sendUnreliable(_ data: Data) async throws {
+        try await unreliableSendHandler(data)
     }
 
     public func close() async throws {
@@ -120,7 +130,9 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
     private var streams: [UInt16: LoomMultiplexedStream] = [:]
     private var nextOutgoingStreamID: UInt16
     private var readTask: Task<Void, Never>?
+    private var unreliableReadTask: Task<Void, Never>?
     private var securityContext: LoomSessionSecurityContext?
+    private var encryptionEnabled = false
     private var currentRemoteEndpoint: NWEndpoint?
     private var currentPathSnapshot: LoomSessionNetworkPathSnapshot?
     private var transportObserversConfigured = false
@@ -152,6 +164,7 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
         stateObservers.finish()
         pathObservers.finish()
         readTask?.cancel()
+        unreliableReadTask?.cancel()
     }
 
     /// Creates an additional observation stream for incoming multiplexed streams.
@@ -184,6 +197,7 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
         identityManager: LoomIdentityManager,
         trustProvider: (any LoomTrustProvider)? = nil,
         helloValidator: LoomSessionHelloValidator = LoomSessionHelloValidator(),
+        encryptionPolicy: LoomSessionEncryptionPolicy = .required,
         queue: DispatchQueue = .global(qos: .userInitiated)
     ) async throws -> LoomAuthenticatedSessionContext {
         guard case .idle = state else {
@@ -220,10 +234,17 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
             Set(localHello.supportedFeatures).intersection(remoteHello.supportedFeatures)
         )
         .sorted()
-        guard negotiatedFeatures.contains("loom.session-encryption.v1") else {
-            updateState(.failed("missing-session-encryption"))
-            rawSession.cancel()
-            throw LoomError.protocolError("Peer does not support Loom authenticated session encryption.")
+
+        let encryptionNegotiated = negotiatedFeatures.contains("loom.session-encryption.v1")
+        switch encryptionPolicy {
+        case .required:
+            guard encryptionNegotiated else {
+                updateState(.failed("missing-session-encryption"))
+                rawSession.cancel()
+                throw LoomError.protocolError("Peer does not support Loom authenticated session encryption.")
+            }
+        case .optional:
+            break
         }
 
         let trustEvaluation = await resolveTrustEvaluation(
@@ -236,24 +257,32 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
             throw LoomError.authenticationFailed
         }
 
-        securityContext = try LoomSessionSecurityContext(
-            role: role,
-            localHello: preparedHello.hello,
-            remoteHello: validatedHello.hello,
-            localEphemeralPrivateKey: preparedHello.ephemeralPrivateKey
-        )
+        if encryptionNegotiated {
+            securityContext = try LoomSessionSecurityContext(
+                role: role,
+                localHello: preparedHello.hello,
+                remoteHello: validatedHello.hello,
+                localEphemeralPrivateKey: preparedHello.ephemeralPrivateKey
+            )
+        }
+        encryptionEnabled = encryptionNegotiated
+
         let context = LoomAuthenticatedSessionContext(
             peerIdentity: peerIdentity,
             peerAdvertisement: validatedHello.hello.advertisement,
             trustEvaluation: trustEvaluation,
             transportKind: transportKind,
-            negotiatedFeatures: negotiatedFeatures
+            negotiatedFeatures: negotiatedFeatures,
+            sessionEncrypted: encryptionNegotiated
         )
         self.context = context
         configureTransportObserversIfNeeded()
         updateState(.ready)
         readTask = Task { [weak self] in
             await self?.runReadLoop()
+        }
+        unreliableReadTask = Task { [weak self] in
+            await self?.runUnreliableReadLoop()
         }
         return context
     }
@@ -317,6 +346,21 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
         }
     }
 
+    private func runUnreliableReadLoop() async {
+        do {
+            while !Task.isCancelled {
+                let data = try await transport.receiveUnreliable(
+                    maxBytes: LoomMessageLimits.maxFrameBytes
+                )
+                let envelope = try decryptEnvelope(data)
+                try await handleEnvelope(envelope)
+            }
+        } catch {
+            if case .cancelled = state { return }
+            if case .failed = state { return }
+        }
+    }
+
     private func handleEnvelope(_ envelope: LoomSessionStreamEnvelope) async throws {
         switch envelope.kind {
         case .open:
@@ -338,21 +382,23 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
     }
 
     private func makeStream(id: UInt16, label: String?) -> LoomMultiplexedStream {
-        LoomMultiplexedStream(
+        let envelopeForData: @Sendable (Data) -> LoomSessionStreamEnvelope = { data in
+            LoomSessionStreamEnvelope(kind: .data, streamID: id, label: nil, payload: data)
+        }
+        return LoomMultiplexedStream(
             id: id,
             label: label,
             sendHandler: { [weak self] data in
                 guard let self else {
                     throw LoomError.protocolError("Authenticated Loom session no longer exists.")
                 }
-                try await self.sendEnvelope(
-                    LoomSessionStreamEnvelope(
-                        kind: .data,
-                        streamID: id,
-                        label: nil,
-                        payload: data
-                    )
-                )
+                try await self.sendEnvelope(envelopeForData(data), reliable: true)
+            },
+            unreliableSendHandler: { [weak self] data in
+                guard let self else {
+                    throw LoomError.protocolError("Authenticated Loom session no longer exists.")
+                }
+                try await self.sendEnvelope(envelopeForData(data), reliable: false)
             },
             closeHandler: { [weak self] in
                 guard let self else {
@@ -375,38 +421,65 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
         streams.removeValue(forKey: id)
     }
 
-    private func sendEnvelope(_ envelope: LoomSessionStreamEnvelope) async throws {
+    private func sendEnvelope(
+        _ envelope: LoomSessionStreamEnvelope,
+        reliable: Bool = true
+    ) async throws {
         let trafficClass = envelope.kind == .data ? LoomSessionTrafficClass.data : .control
         let encodedEnvelope = try envelope.encode()
-        guard var securityContext else {
-            throw LoomError.protocolError("Authenticated Loom session encryption context is unavailable.")
-        }
-        let encryptedPayload = try securityContext.seal(
-            encodedEnvelope,
-            trafficClass: trafficClass
-        )
-        self.securityContext = securityContext
 
-        var wireFrame = Data(capacity: encryptedPayload.count + 1)
-        wireFrame.append(trafficClass.rawValue)
-        wireFrame.append(encryptedPayload)
-        try await transport.sendMessage(wireFrame)
+        let wireFrame: Data
+        if encryptionEnabled {
+            guard let securityContext else {
+                throw LoomError.protocolError("Authenticated Loom session encryption context is unavailable.")
+            }
+            let encryptedPayload = try securityContext.seal(
+                encodedEnvelope,
+                trafficClass: trafficClass
+            )
+            var frame = Data(capacity: encryptedPayload.count + 1)
+            frame.append(trafficClass.rawValue)
+            frame.append(encryptedPayload)
+            wireFrame = frame
+        } else {
+            var frame = Data(capacity: encodedEnvelope.count + 1)
+            frame.append(0x00)
+            frame.append(encodedEnvelope)
+            wireFrame = frame
+        }
+
+        if reliable {
+            try await transport.sendMessage(wireFrame)
+        } else {
+            try await transport.sendUnreliable(wireFrame)
+        }
     }
 
     private func decryptEnvelope(_ wireFrame: Data) throws -> LoomSessionStreamEnvelope {
-        guard let trafficClassRaw = wireFrame.first,
-              let trafficClass = LoomSessionTrafficClass(rawValue: trafficClassRaw) else {
+        guard let firstByte = wireFrame.first else {
+            throw LoomError.protocolError("Received empty Loom session frame.")
+        }
+
+        if firstByte == 0x00 {
+            guard !encryptionEnabled else {
+                throw LoomError.protocolError("Received unencrypted frame on encrypted Loom session.")
+            }
+            return try LoomSessionStreamEnvelope.decode(from: Data(wireFrame.dropFirst()))
+        }
+
+        guard encryptionEnabled else {
+            throw LoomError.protocolError("Received encrypted frame on unencrypted Loom session.")
+        }
+        guard let trafficClass = LoomSessionTrafficClass(rawValue: firstByte) else {
             throw LoomError.protocolError("Received Loom session frame with invalid traffic class.")
         }
-        guard var securityContext else {
+        guard let securityContext else {
             throw LoomError.protocolError("Authenticated Loom session encryption context is unavailable.")
         }
-        let encryptedPayload = Data(wireFrame.dropFirst())
         let plaintext = try securityContext.open(
-            encryptedPayload,
+            Data(wireFrame.dropFirst()),
             trafficClass: trafficClass
         )
-        self.securityContext = securityContext
         return try LoomSessionStreamEnvelope.decode(from: plaintext)
     }
 
@@ -494,6 +567,7 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
 
         updateState(newState)
         readTask?.cancel()
+        unreliableReadTask?.cancel()
         for stream in streams.values {
             stream.finishInbound()
         }

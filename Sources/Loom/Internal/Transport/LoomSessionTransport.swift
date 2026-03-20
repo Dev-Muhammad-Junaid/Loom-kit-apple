@@ -15,10 +15,15 @@ package protocol LoomSessionTransport: Sendable {
     /// Block until the underlying connection is ready for I/O.
     func awaitReady() async throws
 
-    /// Send a complete message (may be length-prefixed for TCP or packetized for UDP).
+    /// Send a complete message reliably (ordered, retransmitted if needed).
     func sendMessage(_ data: Data) async throws
 
-    /// Receive the next complete message. `maxBytes` is advisory and may be ignored
-    /// by datagram-based transports where message boundaries are inherent.
+    /// Receive the next complete reliable message.
     func receiveMessage(maxBytes: Int) async throws -> Data
+
+    /// Send a message without reliability guarantees (fire-and-forget, no retransmission).
+    func sendUnreliable(_ data: Data) async throws
+
+    /// Receive the next unreliable message.
+    func receiveUnreliable(maxBytes: Int) async throws -> Data
 }
