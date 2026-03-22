@@ -322,19 +322,27 @@ private extension LoomDefaultBootstrapControlClient {
     }
 
     func awaitReady(_ connection: NWConnection) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let completion = ReadyContinuationBox(continuation: continuation)
+        if connection.state != .ready {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let completion = ReadyContinuationBox(continuation: continuation)
 
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
+                connection.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        completion.complete(.success(()))
+                    case let .failed(error):
+                        completion.complete(.failure(LoomBootstrapControlError.connectionFailed(error.localizedDescription)))
+                    case .cancelled:
+                        completion.complete(.failure(LoomBootstrapControlError.connectionFailed("Connection cancelled.")))
+                    default:
+                        break
+                    }
+                }
+                // Re-check after handler assignment: if .ready fired between the
+                // outer guard and here, the handler missed it. The lock inside
+                // ReadyContinuationBox ensures only one completion wins.
+                if connection.state == .ready {
                     completion.complete(.success(()))
-                case let .failed(error):
-                    completion.complete(.failure(LoomBootstrapControlError.connectionFailed(error.localizedDescription)))
-                case .cancelled:
-                    completion.complete(.failure(LoomBootstrapControlError.connectionFailed("Connection cancelled.")))
-                default:
-                    break
                 }
             }
         }

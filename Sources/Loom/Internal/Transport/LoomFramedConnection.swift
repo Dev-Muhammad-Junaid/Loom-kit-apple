@@ -33,18 +33,26 @@ package actor LoomFramedConnection: LoomSessionTransport {
     }
 
     package func awaitReady() async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let completion = LoomReadyContinuationBox(continuation: continuation)
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
+        if connection.state != .ready {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let completion = LoomReadyContinuationBox(continuation: continuation)
+                connection.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready:
+                        completion.complete(.success(()))
+                    case let .failed(error):
+                        completion.complete(.failure(LoomError.connectionFailed(error)))
+                    case .cancelled:
+                        completion.complete(.failure(LoomError.connectionFailed(CancellationError())))
+                    default:
+                        break
+                    }
+                }
+                // Re-check after handler assignment: if .ready fired between the
+                // outer guard and here, the handler missed it. The lock inside
+                // LoomReadyContinuationBox ensures only one completion wins.
+                if connection.state == .ready {
                     completion.complete(.success(()))
-                case let .failed(error):
-                    completion.complete(.failure(LoomError.connectionFailed(error)))
-                case .cancelled:
-                    completion.complete(.failure(LoomError.connectionFailed(CancellationError())))
-                default:
-                    break
                 }
             }
         }

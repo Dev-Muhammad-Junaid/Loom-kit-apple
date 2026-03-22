@@ -103,6 +103,12 @@ package actor LoomReliableChannel: LoomSessionTransport {
                         break
                     }
                 }
+                // Re-check after handler assignment: if .ready fired between the
+                // outer guard and here, the handler missed it. The lock inside
+                // ReadyContinuationBox ensures only one completion wins.
+                if connection.state == .ready {
+                    box.complete(.success(()))
+                }
             }
         }
         startReceiveLoop()
