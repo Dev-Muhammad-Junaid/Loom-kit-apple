@@ -127,6 +127,131 @@ struct LoomAuthenticatedSessionTests {
     }
 
     @MainActor
+    @Test("TCP authenticated sessions keep reliable and sendUnreliable payloads coherent")
+    func tcpSessionKeepsReliableAndUnreliablePayloadsCoherent() async throws {
+        let pair = try await makeLoopbackPair()
+        defer {
+            Task {
+                await pair.stop()
+            }
+        }
+
+        async let clientContext = pair.client.start(
+            localHello: pair.clientHello,
+            identityManager: pair.clientIdentityManager
+        )
+        async let serverContext = pair.server.start(
+            localHello: pair.serverHello,
+            identityManager: pair.serverIdentityManager
+        )
+        _ = try await (clientContext, serverContext)
+
+        let incomingStreamsTask = Task<[LoomMultiplexedStream], Never> {
+            var streams: [LoomMultiplexedStream] = []
+            for await stream in pair.server.incomingStreams {
+                streams.append(stream)
+                if streams.count == 2 {
+                    return streams
+                }
+            }
+            return streams
+        }
+
+        let controlStream = try await pair.client.openStream(label: "control")
+        let mediaStream = try await pair.client.openStream(label: "video/1")
+        let incomingStreams = await incomingStreamsTask.value
+        #expect(incomingStreams.count == 2)
+        let serverControlStream = try #require(incomingStreams.first { $0.label == "control" })
+        let serverMediaStream = try #require(incomingStreams.first { $0.label == "video/1" })
+
+        let expectedControlPayloads = (0..<8).map { Data("control-\($0)".utf8) }
+        let expectedMediaPayloads = (0..<8).map { Data("media-\($0)".utf8) }
+
+        let receivedControlTask = Task {
+            await collectPayloads(from: serverControlStream, count: expectedControlPayloads.count)
+        }
+        let receivedMediaTask = Task {
+            await collectPayloads(from: serverMediaStream, count: expectedMediaPayloads.count)
+        }
+
+        for index in expectedControlPayloads.indices {
+            try await controlStream.send(expectedControlPayloads[index])
+            try await mediaStream.sendUnreliable(expectedMediaPayloads[index])
+        }
+        try await controlStream.close()
+        try await mediaStream.close()
+
+        #expect(await receivedControlTask.value == expectedControlPayloads)
+        #expect(await receivedMediaTask.value == expectedMediaPayloads)
+        #expect(await pair.client.state == .ready)
+        #expect(await pair.server.state == .ready)
+    }
+
+    @MainActor
+    @Test("UDP authenticated session blackhole surfaces a timeout failure")
+    func udpBlackholeSurfacesTimeoutFailure() async throws {
+        let listener = try NWListener(using: .udp, on: .any)
+        let readyPort = AsyncBox<UInt16>()
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global(qos: .userInitiated))
+        }
+        listener.stateUpdateHandler = { state in
+            if case .ready = state, let port = listener.port?.rawValue {
+                Task {
+                    await readyPort.set(port)
+                }
+            }
+        }
+        listener.start(queue: .global(qos: .userInitiated))
+        defer {
+            listener.cancel()
+        }
+
+        let port = try #require(await readyPort.take())
+        let connection = NWConnection(
+            host: "127.0.0.1",
+            port: try #require(NWEndpoint.Port(rawValue: port)),
+            using: .udp
+        )
+        let session = LoomAuthenticatedSession(
+            rawSession: LoomSession(connection: connection),
+            role: .initiator,
+            transportKind: .udp
+        )
+        defer {
+            Task {
+                await session.cancel()
+            }
+        }
+
+        let identityManager = LoomIdentityManager(
+            service: "com.ethanlipnik.loom.tests.udp-blackhole.\(UUID().uuidString)",
+            account: "p256-signing",
+            synchronizable: false
+        )
+        let hello = LoomSessionHelloRequest(
+            deviceID: UUID(),
+            deviceName: "UDP Client",
+            deviceType: .mac,
+            advertisement: LoomPeerAdvertisement(deviceType: .mac)
+        )
+
+        do {
+            _ = try await session.start(
+                localHello: hello,
+                identityManager: identityManager
+            )
+            Issue.record("Expected UDP blackhole session start to fail.")
+        } catch let LoomError.connectionFailed(underlying) {
+            let failure = LoomConnectionFailure.classify(underlying)
+            #expect(failure.reason == .timedOut)
+            #expect((failure.errorDescription ?? "").contains("timed out"))
+        } catch {
+            Issue.record("Expected LoomError.connectionFailed, got \(error.localizedDescription).")
+        }
+    }
+
+    @MainActor
     @Test("Authenticated sessions reject oversized stream labels")
     func oversizedStreamLabelRejected() async throws {
         let pair = try await makeLoopbackPair()
@@ -363,6 +488,20 @@ private func firstPayload(from stream: LoomMultiplexedStream) async -> Data? {
         return payload
     }
     return nil
+}
+
+private func collectPayloads(
+    from stream: LoomMultiplexedStream,
+    count: Int
+) async -> [Data] {
+    var payloads: [Data] = []
+    for await payload in stream.incomingBytes {
+        payloads.append(payload)
+        if payloads.count == count {
+            return payloads
+        }
+    }
+    return payloads
 }
 
 private func firstPathSnapshot(

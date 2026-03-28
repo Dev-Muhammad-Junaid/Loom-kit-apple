@@ -310,8 +310,10 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
         readTask = Task { [weak self] in
             await self?.runReadLoop()
         }
-        unreliableReadTask = Task { [weak self] in
-            await self?.runUnreliableReadLoop()
+        if transport.receiveSemantics == .independentReliableAndUnreliable {
+            unreliableReadTask = Task { [weak self] in
+                await self?.runUnreliableReadLoop()
+            }
         }
         return context
     }

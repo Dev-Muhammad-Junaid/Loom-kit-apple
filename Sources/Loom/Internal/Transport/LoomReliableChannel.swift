@@ -16,6 +16,7 @@ import Network
 /// for messages exceeding a single datagram.
 package actor LoomReliableChannel: LoomSessionTransport {
     private let connection: NWConnection
+    package let receiveSemantics: LoomSessionReceiveSemantics = .independentReliableAndUnreliable
 
     // MARK: - Send State
 
@@ -63,6 +64,7 @@ package actor LoomReliableChannel: LoomSessionTransport {
     private var receiveTask: Task<Void, Never>?
     private var ackTask: Task<Void, Never>?
     private var isClosed = false
+    private var terminalFailure: LoomConnectionFailure?
 
     package init(connection: NWConnection) {
         self.connection = connection
@@ -92,9 +94,15 @@ package actor LoomReliableChannel: LoomSessionTransport {
                 case .ready:
                     box.complete(.success(()))
                 case let .failed(error):
-                    box.complete(.failure(LoomError.connectionFailed(error)))
+                    box.complete(.failure(LoomError.connectionFailed(LoomConnectionFailure.classify(error))))
                 case .cancelled:
-                    box.complete(.failure(LoomError.connectionFailed(CancellationError())))
+                    box.complete(
+                        .failure(
+                            LoomError.connectionFailed(
+                                LoomConnectionFailure(reason: .cancelled, detail: "Connection cancelled.")
+                            )
+                        )
+                    )
                 case .waiting(let error):
                     LoomLogger.transport("UDP connection waiting: \(error)")
                     if case .posix(let code) = error,
@@ -103,7 +111,7 @@ package actor LoomReliableChannel: LoomSessionTransport {
                         // fires first the box is already consumed and this
                         // completion is a safe no-op.
                         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                            box.complete(.failure(LoomError.connectionFailed(error)))
+                            box.complete(.failure(LoomError.connectionFailed(LoomConnectionFailure.classify(error))))
                         }
                     }
                 default:
@@ -187,7 +195,12 @@ package actor LoomReliableChannel: LoomSessionTransport {
             }
             return message
         }
-        throw LoomError.connectionFailed(CancellationError())
+        if let terminalFailure {
+            throw LoomError.connectionFailed(terminalFailure)
+        }
+        throw LoomError.connectionFailed(
+            LoomConnectionFailure(reason: .cancelled, detail: "Reliable channel cancelled.")
+        )
     }
 
     /// Send a message without requiring acknowledgment (fire-and-forget).
@@ -218,12 +231,22 @@ package actor LoomReliableChannel: LoomSessionTransport {
             }
             return message
         }
-        throw LoomError.connectionFailed(CancellationError())
+        if let terminalFailure {
+            throw LoomError.connectionFailed(terminalFailure)
+        }
+        throw LoomError.connectionFailed(
+            LoomConnectionFailure(reason: .cancelled, detail: "Reliable channel cancelled.")
+        )
     }
 
-    package func close() {
+    package func close(with failure: LoomConnectionFailure? = nil) {
         guard !isClosed else { return }
         isClosed = true
+        if let failure {
+            terminalFailure = failure
+        } else if terminalFailure == nil {
+            terminalFailure = LoomConnectionFailure(reason: .cancelled, detail: "Reliable channel cancelled.")
+        }
         retryTimer?.cancel()
         receiveTask?.cancel()
         ackTask?.cancel()
@@ -370,6 +393,10 @@ package actor LoomReliableChannel: LoomSessionTransport {
         for (seq, var pending) in pendingAcks {
             if now - pending.sentAt >= rto {
                 if pending.retryCount >= maxRetries {
+                    terminalFailure = LoomConnectionFailure(
+                        reason: .timedOut,
+                        detail: "Reliable UDP transport timed out awaiting acknowledgement."
+                    )
                     failed = true
                     break
                 }
@@ -391,7 +418,7 @@ package actor LoomReliableChannel: LoomSessionTransport {
         }
 
         if failed {
-            close()
+            close(with: terminalFailure)
         }
 
         // Send dedicated ack if peer is waiting
@@ -424,7 +451,8 @@ package actor LoomReliableChannel: LoomSessionTransport {
                     await self.handleIncomingPacket(data)
                 } catch {
                     if !Task.isCancelled {
-                        await self.close()
+                        let failure = (error as? LoomConnectionFailure) ?? LoomConnectionFailure.classify(error)
+                        await self.close(with: failure)
                     }
                     break
                 }
@@ -586,7 +614,7 @@ package actor LoomReliableChannel: LoomSessionTransport {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
                 if let error {
-                    continuation.resume(throwing: LoomError.connectionFailed(error))
+                    continuation.resume(throwing: LoomError.connectionFailed(LoomConnectionFailure.classify(error)))
                 } else {
                     continuation.resume()
                 }
@@ -598,7 +626,7 @@ package actor LoomReliableChannel: LoomSessionTransport {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             connection.receiveMessage { data, _, isComplete, error in
                 if let error {
-                    continuation.resume(throwing: LoomError.connectionFailed(error))
+                    continuation.resume(throwing: LoomError.connectionFailed(LoomConnectionFailure.classify(error)))
                     return
                 }
                 if let data {
@@ -606,7 +634,11 @@ package actor LoomReliableChannel: LoomSessionTransport {
                     return
                 }
                 if isComplete {
-                    continuation.resume(throwing: LoomError.connectionFailed(CancellationError()))
+                    continuation.resume(
+                        throwing: LoomError.connectionFailed(
+                            LoomConnectionFailure(reason: .closed, detail: "UDP connection closed.")
+                        )
+                    )
                     return
                 }
                 continuation.resume(

@@ -7,11 +7,20 @@
 
 import Foundation
 
+package enum LoomSessionReceiveSemantics: Sendable {
+    case singleLane
+    case independentReliableAndUnreliable
+}
+
 /// Abstraction over the framing/delivery layer beneath an authenticated Loom session.
 ///
 /// `LoomFramedConnection` (TCP/QUIC) and `LoomReliableChannel` (UDP) both conform,
 /// allowing `LoomAuthenticatedSession` to be transport-agnostic.
 package protocol LoomSessionTransport: Sendable {
+    /// Describes whether the transport exposes one shared inbound message lane
+    /// or genuinely separate reliable and unreliable receive lanes.
+    var receiveSemantics: LoomSessionReceiveSemantics { get }
+
     /// Start the underlying connection and block until it is ready for I/O.
     ///
     /// Sets the `stateUpdateHandler` **before** calling `NWConnection.start(queue:)`

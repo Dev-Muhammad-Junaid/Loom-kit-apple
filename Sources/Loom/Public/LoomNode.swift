@@ -374,12 +374,9 @@ public final class LoomNode {
 
     private static func isTransientNetworkDown(_ error: LoomError) -> Bool {
         guard case .connectionFailed(let underlying) = error else { return false }
-        if let nwError = underlying as? NWError,
-           case .posix(let code) = nwError,
-           ([.ENETDOWN, .EHOSTUNREACH, .ENETUNREACH] as [POSIXErrorCode]).contains(code) {
-            return true
-        }
-        return false
+        let failure = LoomConnectionFailure.classify(underlying)
+        guard let code = failure.posixCode else { return false }
+        return ([.ENETDOWN, .EHOSTUNREACH, .ENETUNREACH] as [POSIXErrorCode]).contains(code)
     }
 
     nonisolated static func advertisement(

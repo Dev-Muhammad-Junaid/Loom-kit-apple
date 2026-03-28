@@ -11,6 +11,7 @@ import Network
 package actor LoomFramedConnection: LoomSessionTransport {
     private let connection: NWConnection
     private var receiveBuffer = Data()
+    package let receiveSemantics: LoomSessionReceiveSemantics = .singleLane
 
     package init(connection: NWConnection) {
         self.connection = connection
@@ -40,15 +41,21 @@ package actor LoomFramedConnection: LoomSessionTransport {
                 case .ready:
                     completion.complete(.success(()))
                 case let .failed(error):
-                    completion.complete(.failure(LoomError.connectionFailed(error)))
+                    completion.complete(.failure(LoomError.connectionFailed(LoomConnectionFailure.classify(error))))
                 case .cancelled:
-                    completion.complete(.failure(LoomError.connectionFailed(CancellationError())))
+                    completion.complete(
+                        .failure(
+                            LoomError.connectionFailed(
+                                LoomConnectionFailure(reason: .cancelled, detail: "Connection cancelled.")
+                            )
+                        )
+                    )
                 case .waiting(let error):
                     LoomLogger.transport("TCP/QUIC connection waiting: \(error)")
                     if case .posix(let code) = error,
                        ([.ENETDOWN, .EHOSTUNREACH, .ENETUNREACH] as [POSIXErrorCode]).contains(code) {
                         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                            completion.complete(.failure(LoomError.connectionFailed(error)))
+                            completion.complete(.failure(LoomError.connectionFailed(LoomConnectionFailure.classify(error))))
                         }
                     }
                 default:
@@ -95,7 +102,7 @@ package actor LoomFramedConnection: LoomSessionTransport {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
                 if let error {
-                    continuation.resume(throwing: LoomError.connectionFailed(error))
+                    continuation.resume(throwing: LoomError.connectionFailed(LoomConnectionFailure.classify(error)))
                 } else {
                     continuation.resume()
                 }
@@ -106,7 +113,9 @@ package actor LoomFramedConnection: LoomSessionTransport {
     private func appendChunk() async throws {
         let chunk = try await receiveChunk()
         if chunk.isEmpty {
-            throw LoomError.connectionFailed(CancellationError())
+            throw LoomError.connectionFailed(
+                LoomConnectionFailure(reason: .closed, detail: "Connection closed by peer.")
+            )
         }
         receiveBuffer.append(chunk)
     }
@@ -115,7 +124,7 @@ package actor LoomFramedConnection: LoomSessionTransport {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
                 if let error {
-                    continuation.resume(throwing: LoomError.connectionFailed(error))
+                    continuation.resume(throwing: LoomError.connectionFailed(LoomConnectionFailure.classify(error)))
                     return
                 }
                 if let data {
