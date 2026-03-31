@@ -5,3 +5,9 @@ DerivedData/
 docs/
 *.doccarchive/
 *.xcresult
+
+# Xcode junk
+*.xcodeproj
+xcuserdata/
+*.xcuserstate
+project.xcworkspace/

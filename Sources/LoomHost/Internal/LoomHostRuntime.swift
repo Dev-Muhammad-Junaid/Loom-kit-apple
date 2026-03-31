@@ -824,7 +824,8 @@ package actor LoomHostRuntime {
         #if os(macOS)
         .mac
         #elseif os(iOS)
-        UIDevice.current.userInterfaceIdiom == .pad ? .iPad : .iPhone
+        let idiom = MainActor.assumeIsolated { UIDevice.current.userInterfaceIdiom }
+        return idiom == .pad ? .iPad : .iPhone
         #elseif os(visionOS)
         .vision
         #else

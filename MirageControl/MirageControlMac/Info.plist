@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>MirageControl</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+    <!-- Run as menu bar app (no Dock icon) -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Bonjour discovery -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_miragecontrol._tcp</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>MirageControl uses the local network to discover and receive connections from nearby iPads.</string>
+    <!-- Accessibility usage (for CGEvent injection) -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>MirageControl needs Accessibility access to control the cursor and keyboard on behalf of your iPad.</string>
+</dict>
+</plist>

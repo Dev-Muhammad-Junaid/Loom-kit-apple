@@ -1,0 +1,79 @@
+name: MirageControl
+options:
+  bundleIdPrefix: com.miragecontrol
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.4"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  defaultConfig: Debug
+
+packages:
+  Loom:
+    path: ../
+
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+
+configs:
+  Debug: debug
+  Release: release
+
+targets:
+
+  # ─────────────────────────────────────────────────────────────
+  # macOS Host
+  # ─────────────────────────────────────────────────────────────
+  MirageControlMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: MirageControlMac
+        type: group
+      - path: Shared
+        type: group
+    dependencies:
+      - package: Loom
+        product: LoomKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miragecontrol.mac
+        INFOPLIST_FILE: MirageControlMac/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MirageControlMac/MirageControlMac.entitlements
+        PRODUCT_NAME: MirageControl
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: 1
+        # Required for CGEvent mouse injection
+        ENABLE_HARDENED_RUNTIME: YES
+
+  # ─────────────────────────────────────────────────────────────
+  # iOS / iPadOS Client
+  # ─────────────────────────────────────────────────────────────
+  MirageControliOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.4"
+    sources:
+      - path: MirageControliOS
+        type: group
+      - path: Shared
+        type: group
+    dependencies:
+      - package: Loom
+        product: LoomKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miragecontrol.ios
+        INFOPLIST_FILE: MirageControliOS/Info.plist
+        PRODUCT_NAME: MirageControl
+        TARGETED_DEVICE_FAMILY: "1,2"  # iPhone + iPad
+        IPHONEOS_DEPLOYMENT_TARGET: "17.4"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: 1
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SWIFT_VERSION: 6.0

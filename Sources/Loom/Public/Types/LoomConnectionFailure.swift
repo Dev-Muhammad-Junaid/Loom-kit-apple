@@ -89,8 +89,6 @@ public struct LoomConnectionFailure: Error, LocalizedError, Sendable {
             return classify(code, detail: error.localizedDescription)
         case .dns, .tls:
             return LoomConnectionFailure(reason: .other, detail: error.localizedDescription)
-        case .wifiAware:
-            return LoomConnectionFailure(reason: .other, detail: error.localizedDescription)
         @unknown default:
             return LoomConnectionFailure(reason: .other, detail: error.localizedDescription)
         }
