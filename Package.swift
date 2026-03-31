@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.0
 
 //
 //  Package.swift
@@ -14,7 +14,7 @@ let package = Package(
     platforms: [
         .macOS(.v14),
         .iOS("17.4"),
-        .visionOS(.v26),
+        .visionOS(.v2),
     ],
     products: [
         .library(
