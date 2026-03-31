@@ -20,7 +20,7 @@ final class ControlReceiver {
         let taskKey = UUID()
         connectionTasks[taskKey] = Task { [weak self] in
             await self?.consumeMessages(from: connectionHandle)
-            await MainActor.run { [weak self] in
+            _ = await MainActor.run { [weak self] in
                 self?.connectionTasks.removeValue(forKey: taskKey)
             }
         }
@@ -57,6 +57,10 @@ final class ControlReceiver {
 
         case let .macroButton(id):
             await dispatchMacro(id: id)
+            
+        case .authorizationStatus:
+            // Client-bound message; host doesn't process it locally
+            break
         }
     }
 

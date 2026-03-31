@@ -8,6 +8,7 @@ import SwiftUI
 
 struct MacMenuBarView: View {
     @Environment(\.loomContext) private var loomContext
+    @EnvironmentObject private var authManager: DeviceAuthorizationManager
     @LoomQuery(.connections(sort: .connectedAtDescending)) private var connections: [LoomConnectionSnapshot]
 
     let receiver: ControlReceiver
@@ -51,7 +52,26 @@ struct MacMenuBarView: View {
             Divider()
 
             // ── Body ──────────────────────────────────────────────────
-            if connections.filter({ $0.state == .connected }).isEmpty {
+            let authorizedConnections = connections.filter { $0.state == .connected && authManager.isAuthorized(peerID: $0.peerID) }
+            
+            if !authManager.pendingConnections.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("PENDING REQUESTS")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+
+                    ForEach(authManager.pendingConnections) { connection in
+                        PendingConnectionRow(connection: connection, loomContext: loomContext)
+                    }
+                }
+                .padding(.bottom, 8)
+                
+                Divider()
+            }
+
+            if authorizedConnections.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "ipad.and.iphone")
                         .font(.system(size: 32))
@@ -68,14 +88,14 @@ struct MacMenuBarView: View {
                 .padding(.vertical, 20)
             } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("CONNECTED DEVICES")
+                    Text("AUTHORIZED DEVICES")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 16)
                         .padding(.top, 10)
 
-                    ForEach(connections.filter { $0.state == .connected }) { connection in
-                        ConnectionRow(connection: connection)
+                    ForEach(authorizedConnections) { connection in
+                        ConnectionRow(connection: connection, loomContext: loomContext)
                     }
                 }
                 .padding(.bottom, 8)
@@ -119,6 +139,9 @@ struct MacMenuBarView: View {
 
 private struct ConnectionRow: View {
     let connection: LoomConnectionSnapshot
+    let loomContext: LoomContext
+    @EnvironmentObject private var authManager: DeviceAuthorizationManager
+    @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -129,14 +152,77 @@ private struct ConnectionRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.peerName)
                     .font(.system(size: 12, weight: .semibold))
-                Text("Connected")
+                Text("Connected & Authorized")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.system(size: 12))
+            
+            if isHovering {
+                Button {
+                    authManager.removeAndDisconnect(connection: connection, loomContext: loomContext)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .font(.system(size: 14))
+                }
+                .buttonStyle(.plain)
+                .help("Remove Authorization & Disconnect")
+            } else {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.system(size: 12))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 5)
+        .onHover { isHovering = $0 }
+    }
+}
+
+// MARK: - PendingConnectionRow
+
+private struct PendingConnectionRow: View {
+    let connection: LoomConnectionSnapshot
+    let loomContext: LoomContext
+    @EnvironmentObject private var authManager: DeviceAuthorizationManager
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 14))
+                .foregroundStyle(.orange)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(connection.peerName)
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Requesting mouse access")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            
+            HStack(spacing: 6) {
+                Button {
+                    authManager.authorize(connection: connection)
+                } label: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+                .help("Approve")
+                
+                Button {
+                    authManager.reject(connection: connection, loomContext: loomContext)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+                .help("Deny")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 5)

@@ -21,7 +21,16 @@ final class MacDaemon: ObservableObject {
         )
         
         let context = container.mainContext
+        
+        // Wire up authorization manager to feed ControlReceiver
+        DeviceAuthorizationManager.shared.onDeviceAuthorized = { [weak receiver] handle in
+            receiver?.observeConnection(handle)
+        }
+        
         Task {
+            // Defer notification request until NSApplication is fully launched
+            DeviceAuthorizationManager.shared.requestNotificationPermissions()
+            
             // Start Loom runtime permanently
             do {
                 print("MirageControl: 🚀 Attempting to start LoomContext...")
@@ -33,9 +42,16 @@ final class MacDaemon: ObservableObject {
             }
             
             // Observe incoming iOS peer connections
-            for await connection in context.incomingConnections {
-                print("MirageControl: 📥 Received incoming connection: \(await connection.id)")
-                receiver.observeConnection(connection)
+            for await handle in context.incomingConnections {
+                let id = await handle.id
+                print("MirageControl: 📥 Received incoming connection: \(id)")
+                
+                // allow a micro-delay for context store sync
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                
+                if let snapshot = await MainActor.run(body: { context.connections.first(where: { $0.id == id }) }) {
+                    await DeviceAuthorizationManager.shared.handleIncomingConnection(snapshot, handle: handle)
+                }
             }
         }
     }
@@ -49,6 +65,7 @@ struct MacHostApp: App {
         MenuBarExtra("MirageControl", systemImage: "cursorarrow.rays") {
             MacMenuBarView(receiver: daemon.receiver)
                 .loomContainer(daemon.container, autostart: false)
+                .environmentObject(DeviceAuthorizationManager.shared)
         }
         .menuBarExtraStyle(.window)
     }

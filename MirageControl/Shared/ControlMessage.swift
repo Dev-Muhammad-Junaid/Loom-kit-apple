@@ -15,16 +15,17 @@ public enum ControlMessage: Codable, Sendable {
     case keyboardShortcut(keys: [String])
     case launchApp(bundleID: String)
     case macroButton(id: String)
+    case authorizationStatus(status: String)
 
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, id
+        case type, dx, dy, button, keys, bundleID, id, status
     }
 
     private enum MessageType: String, Codable {
         case mouseDelta, mouseScroll, mouseClick, mouseDoubleClick
-        case keyboardShortcut, launchApp, macroButton
+        case keyboardShortcut, launchApp, macroButton, authorizationStatus
     }
 
     public init(from decoder: Decoder) throws {
@@ -47,6 +48,8 @@ public enum ControlMessage: Codable, Sendable {
             self = .launchApp(bundleID: try c.decode(String.self, forKey: .bundleID))
         case .macroButton:
             self = .macroButton(id: try c.decode(String.self, forKey: .id))
+        case .authorizationStatus:
+            self = .authorizationStatus(status: try c.decode(String.self, forKey: .status))
         }
     }
 
@@ -74,6 +77,9 @@ public enum ControlMessage: Codable, Sendable {
         case let .macroButton(id):
             try c.encode(MessageType.macroButton, forKey: .type)
             try c.encode(id, forKey: .id)
+        case let .authorizationStatus(status):
+            try c.encode(MessageType.authorizationStatus, forKey: .type)
+            try c.encode(status, forKey: .status)
         }
     }
 }
