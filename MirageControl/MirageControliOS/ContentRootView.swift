@@ -41,6 +41,22 @@ struct ContentRootView: View {
                 ))
                 .task(id: connection.peerName) {
                     authStatus = "pending"
+                    
+                    Task {
+                        for await event in connection.handle.events {
+                            if case .disconnected = event {
+                                await MainActor.run {
+                                    if authStatus != "denied" {
+                                        withAnimation(.spring(duration: 0.3)) {
+                                            authStatus = "host_disconnected"
+                                        }
+                                    }
+                                }
+                                break
+                            }
+                        }
+                    }
+                    
                     for await data in connection.handle.messages {
                         if let msg = try? JSONDecoder().decode(ControlMessage.self, from: data) {
                             if case let .authorizationStatus(status) = msg {

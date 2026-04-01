@@ -34,6 +34,22 @@ struct AuthorizationOverlay: View {
                             .foregroundColor(.gray)
                             .multilineTextAlignment(.center)
                     }
+                } else if status == "host_disconnected" {
+                    // Host Disconnected State
+                    Image(systemName: "wifi.slash")
+                        .font(.system(size: 64))
+                        .foregroundStyle(.orange)
+                    
+                    VStack(spacing: 8) {
+                        Text("Disconnected")
+                            .font(.title2.bold())
+                            .foregroundColor(.white)
+                        
+                        Text("The connection to \(peerName) was closed.")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                            .multilineTextAlignment(.center)
+                    }
                 } else if status == "denied" {
                     // Denied State
                     Image(systemName: "xmark.shield.fill")
@@ -53,7 +69,7 @@ struct AuthorizationOverlay: View {
                 }
                 
                 Button(action: onDisconnect) {
-                    Text("Disconnect")
+                    Text((status == "denied" || status == "host_disconnected") ? "Dismiss" : "Disconnect")
                         .font(.headline)
                         .foregroundColor(.white)
                         .padding(.horizontal, 24)
