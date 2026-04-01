@@ -8,6 +8,7 @@ import UIKit
 
 struct TrackpadView: View {
     let sender: TrackpadSender
+    let colorScheme: ColorScheme
 
     @State private var scrollMode = false
     @State private var lastDragLocation: CGPoint?
@@ -21,25 +22,28 @@ struct TrackpadView: View {
     @State private var longPressTask: Task<Void, Never>?
     @State private var lastTapTime: Date?
 
+    private var bg: Color {
+        colorScheme == .dark ? Color(hex: "0A0A0F") : Color(UIColor.systemGroupedBackground)
+    }
+    private var surfaceFill: Color {
+        colorScheme == .dark ? .white.opacity(0.06) : Color(UIColor.systemBackground)
+    }
+    private var surfaceShadowColor: Color {
+        colorScheme == .dark ? .black.opacity(0.3) : .black.opacity(0.07)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // ── Trackpad surface ──────────────────────────────────────
             ZStack {
                 // Background glass
                 RoundedRectangle(cornerRadius: 28)
-                    .fill(.ultraThinMaterial)
+                    .fill(surfaceFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: 28)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [.white.opacity(0.3), .white.opacity(0.05)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.5
-                            )
+                            .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.3), radius: 20, y: 10)
+                    .shadow(color: surfaceShadowColor, radius: 16, y: 8)
 
                 // Mode label
                 VStack {
@@ -48,11 +52,11 @@ struct TrackpadView: View {
                         VStack(alignment: .trailing, spacing: 4) {
                             Text(scrollMode ? "Scroll Mode" : "Trackpad")
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.45))
+                                .foregroundStyle(Color.secondary.opacity(0.7))
                             
                             Text("Tap • Left  |  Long Press • Right")
                                 .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.25))
+                                .foregroundStyle(Color.secondary.opacity(0.5))
                         }
                         .padding(12)
                     }
@@ -76,7 +80,7 @@ struct TrackpadView: View {
                     HStack(spacing: 6) {
                         ForEach(0..<3) { _ in
                             Circle()
-                                .fill(.white.opacity(0.12))
+                                .fill(Color.primary.opacity(0.1))
                                 .frame(width: 5, height: 5)
                         }
                     }
@@ -99,30 +103,24 @@ struct TrackpadView: View {
             // ── Sensitivity slider ────────────────────────────────────
             HStack(spacing: 8) {
                 Image(systemName: "tortoise")
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.secondary)
                     .font(.system(size: 12))
                 Slider(value: $sensitivity, in: 0.5...4.0)
-                    .tint(Color(hex: "6C63FF"))
+                    .tint(Color.primary.opacity(0.6))
                 Image(systemName: "hare")
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.secondary)
                     .font(.system(size: 12))
             }
             .padding(.horizontal, 28)
             .padding(.top, 8)
 
             // ── Gesture button bar ────────────────────────────────────
-            GestureButtonBar(sender: sender, scrollMode: $scrollMode)
+            GestureButtonBar(sender: sender, scrollMode: $scrollMode, colorScheme: colorScheme)
                 .padding(.horizontal, 20)
                 .padding(.top, 10)
                 .padding(.bottom, 16)
         }
-        .background(
-            LinearGradient(
-                colors: [Color(hex: "1A1A2E"), Color(hex: "16213E")],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
+        .background(bg)
     }
 
     // MARK: - Drag handling
@@ -144,7 +142,8 @@ struct TrackpadView: View {
                 await sender.sendClick(.right)
                 
                 await MainActor.run {
-                    let impact = UIImpactFeedbackGenerator(style: .medium)
+                    // Heavy impact for right click — feels distinct from left
+                    let impact = UIImpactFeedbackGenerator(style: .heavy)
                     impact.impactOccurred()
                     triggerRipple(at: current)
                 }
@@ -189,14 +188,20 @@ struct TrackpadView: View {
             if duration < 0.3 {
                 let now = Date()
                 if let lastTap = lastTapTime, now.timeIntervalSince(lastTap) < 0.35 {
-                    // Double Tap
+                    // Double Tap — two quick medium impacts
                     Task { await sender.sendDoubleClick(.left) }
                     triggerRipple(at: startLoc)
-                    lastTapTime = nil // reset chain
+                    lastTapTime = nil
+                    let impact = UIImpactFeedbackGenerator(style: .medium)
+                    impact.impactOccurred()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                        impact.impactOccurred()
+                    }
                 } else {
-                    // Single Tap
+                    // Single Tap — medium impact
                     Task { await sender.sendClick(.left) }
                     lastTapTime = now
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 }
             }
         }
@@ -222,31 +227,58 @@ struct TrackpadView: View {
 struct GestureButtonBar: View {
     let sender: TrackpadSender
     @Binding var scrollMode: Bool
+    let colorScheme: ColorScheme
 
     var body: some View {
-        HStack(spacing: 10) {
-            GestureButton(label: "Left", icon: "hand.point.left.fill", color: Color(hex: "6C63FF")) {
+        HStack(spacing: 0) {
+            GestureButton(label: "Left Click",   icon: "cursorarrow.click",              color: Color(hex: "6C63FF"), haptic: .medium, colorScheme: colorScheme) {
                 Task { await sender.sendClick(.left) }
             }
-            GestureButton(label: "Right", icon: "hand.point.right.fill", color: Color(hex: "7C3AED")) {
+            GestureButton(label: "Right Click",  icon: "cursorarrow.click.2",            color: Color(hex: "A78BFA"), haptic: .heavy,  colorScheme: colorScheme) {
                 Task { await sender.sendClick(.right) }
             }
-            GestureButton(label: "Double", icon: "hand.tap.fill", color: Color(hex: "6D28D9")) {
+            GestureButton(label: "Double Click", icon: "cursorarrow.click.badge.clock",  color: Color(hex: "818CF8"), haptic: .double, colorScheme: colorScheme) {
                 Task { await sender.sendDoubleClick(.left) }
             }
             GestureButton(
-                label: scrollMode ? "Scroll ✓" : "Scroll",
-                icon: scrollMode ? "scroll.fill" : "scroll",
-                color: scrollMode ? Color(hex: "10B981") : Color(hex: "374151")
+                label: scrollMode ? "Scroll On" : "Scroll",
+                icon:  scrollMode ? "arrow.up.and.down.and.sparkles" : "arrow.up.and.down",
+                color: scrollMode ? Color(hex: "10B981") : Color.secondary,
+                haptic: .selection,
+                colorScheme: colorScheme
             ) {
                 scrollMode.toggle()
             }
-            GestureButton(label: "Mission", icon: "square.grid.2x2", color: Color(hex: "1D4ED8")) {
+            GestureButton(label: "Mission", icon: "macwindow.on.rectangle", color: Color(hex: "38BDF8"), haptic: .light, colorScheme: colorScheme) {
                 Task { await sender.sendShortcut(["ctrl", "up"]) }
             }
-            GestureButton(label: "Desktop", icon: "desktopcomputer", color: Color(hex: "0F766E")) {
+            GestureButton(label: "Desktop", icon: "menubar.rectangle",       color: Color(hex: "34D399"), haptic: .light, colorScheme: colorScheme) {
                 Task { await sender.sendShortcut(["fn", "f11"]) }
             }
+        }
+    }
+}
+
+// MARK: - Haptic style
+
+enum GestureHaptic {
+    case light, medium, heavy, double, selection
+
+    @MainActor
+    func trigger() {
+        switch self {
+        case .light:
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case .medium:
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        case .heavy:
+            UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+        case .selection:
+            UISelectionFeedbackGenerator().selectionChanged()
+        case .double:
+            let g = UIImpactFeedbackGenerator(style: .medium)
+            g.impactOccurred()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { g.impactOccurred() }
         }
     }
 }
@@ -257,38 +289,38 @@ struct GestureButton: View {
     let label: String
     let icon: String
     let color: Color
+    var haptic: GestureHaptic = .medium
+    let colorScheme: ColorScheme
     let action: () -> Void
 
     @State private var isPressed = false
 
     var body: some View {
         Button(action: {
-            let impact = UIImpactFeedbackGenerator(style: .light)
-            impact.impactOccurred()
+            haptic.trigger()
             action()
         }) {
-            VStack(spacing: 4) {
+            VStack(spacing: 5) {
                 Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 28, weight: .thin))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isPressed ? color : color.opacity(0.8))
+                    .frame(height: 34)
                 Text(label)
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.8))
+                    .font(.system(size: 8.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.secondary.opacity(isPressed ? 1.0 : 0.8))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 60)
+            .frame(height: 62)
             .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(color.opacity(isPressed ? 0.9 : 0.7))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .strokeBorder(.white.opacity(0.2), lineWidth: 1)
-                    )
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isPressed ? color.opacity(colorScheme == .dark ? 0.15 : 0.1) : Color.clear)
+                    .animation(.easeOut(duration: 0.12), value: isPressed)
             )
-            .scaleEffect(isPressed ? 0.93 : 1.0)
-            .animation(.spring(duration: 0.18), value: isPressed)
+            .scaleEffect(isPressed ? 0.90 : 1.0)
+            .animation(.spring(response: 0.18, dampingFraction: 0.6), value: isPressed)
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
