@@ -15,11 +15,20 @@ struct ContentRootView: View {
         Group {
             if let connection = activeConnection {
                 ZStack {
-                    ControlView(connection: connection.handle, peerName: connection.peerName) {
-                        Task { await connection.handle.disconnect() }
-                        activeConnection = nil
-                        authStatus = "pending"
-                    }
+                    ControlView(
+                        connection: connection.handle,
+                        peerName: connection.peerName,
+                        onAuthStatusChanged: { status in
+                            withAnimation(.spring(duration: 0.3)) {
+                                authStatus = status
+                            }
+                        },
+                        onDisconnect: {
+                            Task { await connection.handle.disconnect() }
+                            activeConnection = nil
+                            authStatus = "pending"
+                        }
+                    )
                     .blur(radius: authStatus == "granted" ? 0 : 15)
                     .disabled(authStatus != "granted")
                     
@@ -42,28 +51,19 @@ struct ContentRootView: View {
                 .task(id: connection.peerName) {
                     authStatus = "pending"
                     
-                    Task {
-                        for await event in connection.handle.events {
-                            if case .disconnected = event {
-                                await MainActor.run {
-                                    if authStatus != "denied" {
-                                        withAnimation(.spring(duration: 0.3)) {
-                                            authStatus = "host_disconnected"
-                                        }
+                    // Only listen for connection-level events (disconnect) here.
+                    // All message-level handling is consolidated in ControlView
+                    // to avoid competing async consumers on the same stream.
+                    for await event in connection.handle.events {
+                        if case .disconnected = event {
+                            await MainActor.run {
+                                if authStatus != "denied" {
+                                    withAnimation(.spring(duration: 0.3)) {
+                                        authStatus = "host_disconnected"
                                     }
                                 }
-                                break
                             }
-                        }
-                    }
-                    
-                    for await data in connection.handle.messages {
-                        if let msg = try? JSONDecoder().decode(ControlMessage.self, from: data) {
-                            if case let .authorizationStatus(status) = msg {
-                                withAnimation(.spring(duration: 0.3)) {
-                                    authStatus = status
-                                }
-                            }
+                            break
                         }
                     }
                 }

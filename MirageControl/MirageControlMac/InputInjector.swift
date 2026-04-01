@@ -8,6 +8,12 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+// These constants are defined in IOKit/hidsystem/ev_keymap.h but aren't
+// globally visible without importing IOKit.hid.
+let NX_KEYTYPE_PLAY: Int32 = 16
+let NX_KEYTYPE_NEXT: Int32 = 17
+let NX_KEYTYPE_PREVIOUS: Int32 = 18
+
 /// Injects mouse and keyboard events into the macOS input system via CGEvent.
 /// Requires Accessibility access — call `requestAccessibility()` on first use.
 @MainActor
@@ -101,6 +107,43 @@ final class InputInjector {
         let keyUp = CGEvent(keyboardEventSource: src, virtualKey: kc, keyDown: false)
         keyUp?.flags = modifiers
         keyUp?.post(tap: .cghidEventTap)
+    }
+
+    // MARK: - Media Controls
+
+    /// Sends a system-defined media key (e.g., NX_KEYTYPE_PLAY).
+    func sendMediaKey(_ keyType: Int32) {
+        guard isAccessibilityGranted else { return }
+
+        // System defined key down
+        if let down = NSEvent.otherEvent(
+            with: .systemDefined,
+            location: .zero,
+            modifierFlags: [(keyType == NX_KEYTYPE_PLAY || keyType == NX_KEYTYPE_NEXT || keyType == NX_KEYTYPE_PREVIOUS) ? NSEvent.ModifierFlags(rawValue: 0) : .init()],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            subtype: 8,
+            data1: Int((keyType << 16) | (0xa << 8)),
+            data2: -1
+        ) {
+            down.cgEvent?.post(tap: .cghidEventTap)
+        }
+
+        // System defined key up
+        if let up = NSEvent.otherEvent(
+            with: .systemDefined,
+            location: .zero,
+            modifierFlags: [(keyType == NX_KEYTYPE_PLAY || keyType == NX_KEYTYPE_NEXT || keyType == NX_KEYTYPE_PREVIOUS) ? NSEvent.ModifierFlags(rawValue: 0) : .init()],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            subtype: 8,
+            data1: Int((keyType << 16) | (0xb << 8)),
+            data2: -1
+        ) {
+            up.cgEvent?.post(tap: .cghidEventTap)
+        }
     }
 
     // MARK: - Helpers

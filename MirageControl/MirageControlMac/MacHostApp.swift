@@ -31,6 +31,10 @@ final class MacDaemon: ObservableObject {
             // Defer notification request until NSApplication is fully launched
             DeviceAuthorizationManager.shared.requestNotificationPermissions()
             
+            // Proactively prompt for Screen Recording permission at launch
+            // so macOS shows the dialog immediately, before the user taps screenshot.
+            receiver.requestScreenCaptureIfNeeded()
+            
             // Start Loom runtime permanently
             do {
                 print("MirageControl: 🚀 Attempting to start LoomContext...")

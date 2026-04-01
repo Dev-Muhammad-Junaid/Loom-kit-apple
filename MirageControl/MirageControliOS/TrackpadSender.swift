@@ -17,12 +17,42 @@ actor TrackpadSender {
         self.handle = handle
     }
 
+    private var pendingDeltaX: Float = 0
+    private var pendingDeltaY: Float = 0
+    private var isSendScheduled: Bool = false
+
     // MARK: - Throttled mouse delta
 
     func sendMouseDelta(dx: Float, dy: Float) async {
+        pendingDeltaX += dx
+        pendingDeltaY += dy
+        
         let now = Date()
-        guard now.timeIntervalSince(lastSentAt) >= minimumInterval else { return }
-        lastSentAt = now
+        let timeSinceLastSend = now.timeIntervalSince(lastSentAt)
+        
+        if timeSinceLastSend >= minimumInterval {
+            await flushMouseDelta()
+        } else if !isSendScheduled {
+            isSendScheduled = true
+            let delay = minimumInterval - timeSinceLastSend
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                await self.flushMouseDelta()
+            }
+        }
+    }
+
+    private func flushMouseDelta() async {
+        isSendScheduled = false
+        guard pendingDeltaX != 0 || pendingDeltaY != 0 else { return }
+        
+        let dx = pendingDeltaX
+        let dy = pendingDeltaY
+        
+        pendingDeltaX = 0
+        pendingDeltaY = 0
+        lastSentAt = Date()
+        
         await send(.mouseDelta(dx: dx, dy: dy))
     }
 
@@ -50,6 +80,14 @@ actor TrackpadSender {
 
     func sendLaunchApp(_ bundleID: String) async {
         await send(.launchApp(bundleID: bundleID))
+    }
+
+    func sendMediaAction(_ action: String) async {
+        await send(.mediaCommand(action: action))
+    }
+
+    func requestScreenshot() async {
+        await send(.requestScreenshot)
     }
 
     // MARK: - Core send

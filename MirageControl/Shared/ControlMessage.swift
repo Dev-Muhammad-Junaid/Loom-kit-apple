@@ -16,16 +16,24 @@ public enum ControlMessage: Codable, Sendable {
     case launchApp(bundleID: String)
     case macroButton(id: String)
     case authorizationStatus(status: String)
+    
+    // Bidirectional/New Features
+    case requestScreenshot
+    case mediaCommand(action: String)
+    case screenshotData(data: Data)
+    case screenshotError(message: String)
+    case activeAppUpdate(name: String, bundleID: String?)
 
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, id, status
+        case type, dx, dy, button, keys, bundleID, id, status, action, data, name, message
     }
 
     private enum MessageType: String, Codable {
         case mouseDelta, mouseScroll, mouseClick, mouseDoubleClick
         case keyboardShortcut, launchApp, macroButton, authorizationStatus
+        case requestScreenshot, mediaCommand, screenshotData, screenshotError, activeAppUpdate
     }
 
     public init(from decoder: Decoder) throws {
@@ -50,6 +58,17 @@ public enum ControlMessage: Codable, Sendable {
             self = .macroButton(id: try c.decode(String.self, forKey: .id))
         case .authorizationStatus:
             self = .authorizationStatus(status: try c.decode(String.self, forKey: .status))
+        case .requestScreenshot:
+            self = .requestScreenshot
+        case .mediaCommand:
+            self = .mediaCommand(action: try c.decode(String.self, forKey: .action))
+        case .screenshotData:
+            self = .screenshotData(data: try c.decode(Data.self, forKey: .data))
+        case .screenshotError:
+            self = .screenshotError(message: try c.decode(String.self, forKey: .message))
+        case .activeAppUpdate:
+            self = .activeAppUpdate(name: try c.decode(String.self, forKey: .name),
+                                    bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID))
         }
     }
 
@@ -80,6 +99,21 @@ public enum ControlMessage: Codable, Sendable {
         case let .authorizationStatus(status):
             try c.encode(MessageType.authorizationStatus, forKey: .type)
             try c.encode(status, forKey: .status)
+        case .requestScreenshot:
+            try c.encode(MessageType.requestScreenshot, forKey: .type)
+        case let .mediaCommand(action):
+            try c.encode(MessageType.mediaCommand, forKey: .type)
+            try c.encode(action, forKey: .action)
+        case let .screenshotData(data):
+            try c.encode(MessageType.screenshotData, forKey: .type)
+            try c.encode(data, forKey: .data)
+        case let .screenshotError(message):
+            try c.encode(MessageType.screenshotError, forKey: .type)
+            try c.encode(message, forKey: .message)
+        case let .activeAppUpdate(name, bundleID):
+            try c.encode(MessageType.activeAppUpdate, forKey: .type)
+            try c.encode(name, forKey: .name)
+            try c.encodeIfPresent(bundleID, forKey: .bundleID)
         }
     }
 }

@@ -33,14 +33,30 @@ public struct SystemShortcut: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+public struct MediaAction: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    public let displayName: String
+    public let sfSymbol: String
+    public let action: String
+
+    public init(id: String, displayName: String, sfSymbol: String, action: String) {
+        self.id = id
+        self.displayName = displayName
+        self.sfSymbol = sfSymbol
+        self.action = action
+    }
+}
+
 public enum MacroItem: Identifiable, Codable, Hashable, Sendable {
     case app(AppShortcut)
     case shortcut(SystemShortcut)
+    case media(MediaAction)
 
     public var id: String {
         switch self {
         case .app(let a): "app-\(a.id)"
         case .shortcut(let s): "shortcut-\(s.id)"
+        case .media(let m): "media-\(m.id)"
         }
     }
 
@@ -48,6 +64,7 @@ public enum MacroItem: Identifiable, Codable, Hashable, Sendable {
         switch self {
         case .app(let a): a.displayName
         case .shortcut(let s): s.displayName
+        case .media(let m): m.displayName
         }
     }
 
@@ -55,11 +72,12 @@ public enum MacroItem: Identifiable, Codable, Hashable, Sendable {
         switch self {
         case .app(let a): a.sfSymbol
         case .shortcut(let s): s.sfSymbol
+        case .media(let m): m.sfSymbol
         }
     }
 
     private enum CodingKeys: String, CodingKey { case type, payload }
-    private enum ItemType: String, Codable { case app, shortcut }
+    private enum ItemType: String, Codable { case app, shortcut, media }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -67,6 +85,7 @@ public enum MacroItem: Identifiable, Codable, Hashable, Sendable {
         switch type {
         case .app: self = .app(try c.decode(AppShortcut.self, forKey: .payload))
         case .shortcut: self = .shortcut(try c.decode(SystemShortcut.self, forKey: .payload))
+        case .media: self = .media(try c.decode(MediaAction.self, forKey: .payload))
         }
     }
 
@@ -79,6 +98,9 @@ public enum MacroItem: Identifiable, Codable, Hashable, Sendable {
         case .shortcut(let s):
             try c.encode(ItemType.shortcut, forKey: .type)
             try c.encode(s, forKey: .payload)
+        case .media(let m):
+            try c.encode(ItemType.media, forKey: .type)
+            try c.encode(m, forKey: .payload)
         }
     }
 }
@@ -96,8 +118,10 @@ public extension MacroItem {
         .app(.init(id: "mail",      displayName: "Mail",      bundleID: "com.apple.mail",                    sfSymbol: "envelope")),
         .app(.init(id: "calendar",  displayName: "Calendar",  bundleID: "com.apple.iCal",                    sfSymbol: "calendar")),
         .shortcut(.init(id: "missioncontrol", displayName: "Mission Control", sfSymbol: "square.grid.2x2",   keys: ["ctrl", "up"])),
-        .shortcut(.init(id: "launchpad",      displayName: "Launchpad",       sfSymbol: "circle.grid.3x3",   keys: ["cmd", "space"])),   // overridden on host
+        .shortcut(.init(id: "launchpad",      displayName: "Launchpad",       sfSymbol: "circle.grid.3x3",   keys: ["cmd", "space"])),
         .shortcut(.init(id: "showdesktop",    displayName: "Show Desktop",    sfSymbol: "desktopcomputer",   keys: ["fn", "f11"])),
-        .shortcut(.init(id: "screenshot",     displayName: "Screenshot",      sfSymbol: "camera.viewfinder", keys: ["cmd", "shift", "3"])),
+        .media(.init(id: "prev", displayName: "Previous", sfSymbol: "backward.end.fill", action: "prev")),
+        .media(.init(id: "playpause", displayName: "Play/Pause", sfSymbol: "playpause.fill", action: "playpause")),
+        .media(.init(id: "next", displayName: "Next", sfSymbol: "forward.end.fill", action: "next"))
     ]
 }

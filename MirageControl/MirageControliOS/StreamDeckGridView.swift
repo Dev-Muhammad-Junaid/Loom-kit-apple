@@ -28,7 +28,14 @@ struct StreamDeckGridView: View {
                 ForEach(deck) { item in
                     DeckButton(item: item, colorScheme: colorScheme) {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        Task { await sender.sendMacro(item.id) }
+                        Task {
+                            switch item {
+                            case .media(let m):
+                                await sender.sendMediaAction(m.action)
+                            default:
+                                await sender.sendMacro(item.id)
+                            }
+                        }
                     }
                 }
             }
@@ -79,11 +86,12 @@ struct DeckButton: View {
     @ViewBuilder
     private var iconView: some View {
         switch item {
-        case .app(let app):
-            AppIconView(app: app)
-
-        case .shortcut(let shortcut):
-            ShortcutIconView(shortcut: shortcut)
+        case .app(let a):
+            AppIconView(app: a)
+        case .shortcut(let s):
+            ShortcutIconView(shortcut: s)
+        case .media(let m):
+            MediaIconView(media: m)
         }
     }
 }
@@ -145,5 +153,18 @@ private struct ShortcutIconView: View {
             .font(.system(size: 48, weight: .thin))
             .symbolRenderingMode(.hierarchical)
             .foregroundStyle(Color(hex: "A78BFA"))
+    }
+}
+
+// MARK: - MediaIconView
+
+struct MediaIconView: View {
+    let media: MediaAction
+
+    var body: some View {
+        Image(systemName: media.sfSymbol)
+            .font(.system(size: 44, weight: .thin))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(Color.primary.opacity(0.8))
     }
 }

@@ -40,5 +40,9 @@
     </array>
     <key>NSLocalNetworkUsageDescription</key>
     <string>MirageControl uses the local network to discover and connect to nearby Macs.</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>MirageControl needs permission to save screenshots of your Mac directly to your Photos library.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>MirageControl needs permission to save screenshots of your Mac directly to your Photos library.</string>
 </dict>
 </plist>

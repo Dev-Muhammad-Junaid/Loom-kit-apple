@@ -9,11 +9,20 @@ import SwiftUI
 struct ControlView: View {
     let connection: LoomConnectionHandle
     let peerName: String
+    let onAuthStatusChanged: (String) -> Void
     let onDisconnect: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var selectedTab: Tab = .trackpad
     @State private var sender: TrackpadSender?
+
+    // Bidirectional state
+    @State private var activeAppName: String?
+    @State private var screenshotImage: UIImage?
+    @State private var isRequestingScreenshot = false   // in-flight guard
+    @State private var isScreenshotPresented = false
+    @State private var screenshotTimeoutTask: Task<Void, Never>?
+    @State private var screenshotErrorMessage: String?
 
     enum Tab: String, CaseIterable {
         case trackpad   = "Trackpad"
@@ -76,8 +85,93 @@ struct ControlView: View {
                 }
             }
         }
+        // Screenshot sheet
+        .fullScreenCover(isPresented: $isScreenshotPresented) {
+            ZStack {
+                if let img = screenshotImage {
+                    ScreenshotPreviewView(image: img) {
+                        isScreenshotPresented = false
+                    }
+                } else {
+                    // Loading state while waiting for Mac response
+                    ZStack {
+                        Color.black.ignoresSafeArea()
+                        VStack(spacing: 18) {
+                            ProgressView()
+                                .tint(.white)
+                                .scaleEffect(1.4)
+                            Text("Capturing screen…")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.6))
+                            Button("Cancel") {
+                                screenshotTimeoutTask?.cancel()
+                                isScreenshotPresented = false
+                            }
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white.opacity(0.4))
+                        }
+                    }
+                }
+            }
+        }
+        .alert("Screenshot Failed", isPresented: Binding(
+            get: { screenshotErrorMessage != nil },
+            set: { if !$0 { screenshotErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { screenshotErrorMessage = nil }
+        } message: {
+            Text(screenshotErrorMessage ?? "")
+        }
         .task {
             sender = TrackpadSender(handle: connection)
+            // Single consolidated message loop — no competing consumers
+            await listenForHostMessages()
+        }
+    }
+
+    // MARK: - Single Message Listener
+    //
+    // All messages from the Mac come through here. Splitting this loop
+    // across multiple views causes AsyncSequence racing where messages get
+    // silently consumed by the wrong listener.
+
+    private func listenForHostMessages() async {
+        for await data in connection.messages {
+            guard let message = try? JSONDecoder().decode(ControlMessage.self, from: data) else {
+                continue
+            }
+            await MainActor.run {
+                switch message {
+                case let .authorizationStatus(status):
+                    onAuthStatusChanged(status)
+
+                case let .activeAppUpdate(name, _):
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        activeAppName = name
+                    }
+
+                case let .screenshotData(data):
+                    screenshotTimeoutTask?.cancel()
+                    isRequestingScreenshot = false
+                    if let img = UIImage(data: data) {
+                        screenshotImage = img
+                        // isScreenshotPresented is already true; ZStack swaps to ScreenshotPreviewView
+                    } else {
+                        // Data arrived but was not a valid image
+                        isScreenshotPresented = false
+                        screenshotErrorMessage = "Received invalid image data from Mac."
+                    }
+
+                case let .screenshotError(message):
+                    screenshotTimeoutTask?.cancel()
+                    isRequestingScreenshot = false
+                    isScreenshotPresented = false
+                    screenshotErrorMessage = message
+
+                default:
+                    break
+                }
+            }
         }
     }
 
@@ -94,31 +188,91 @@ struct ControlView: View {
                         .fill(Color(hex: "22C55E"))
                         .frame(width: 6, height: 6)
                         .shadow(color: Color(hex: "22C55E").opacity(0.8), radius: 4)
-                    Text("Connected")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.secondary)
+
+                    if let app = activeAppName {
+                        Text(app)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.secondary)
+                            .id(app)
+                    } else {
+                        Text("Connected")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.secondary)
+                    }
                 }
             }
 
             Spacer()
 
-            Button(action: onDisconnect) {
-                HStack(spacing: 5) {
-                    Image(systemName: "minus.circle")
-                        .font(.system(size: 12))
-                    Text("Disconnect")
-                        .font(.system(size: 12, weight: .medium))
+            HStack(spacing: 12) {
+                // Screenshot button — disabled while a request is already in-flight
+                Button(action: {
+                    guard !isRequestingScreenshot else { return }
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+                    // Reset state before opening the sheet
+                    screenshotImage = nil
+                    screenshotErrorMessage = nil
+                    isRequestingScreenshot = true
+                    isScreenshotPresented = true
+
+                    Task { await sender?.requestScreenshot() }
+
+                    // Cancel any previous timeout and start a fresh 8-second window
+                    screenshotTimeoutTask?.cancel()
+                    screenshotTimeoutTask = Task { @MainActor in
+                        do {
+                            try await Task.sleep(nanoseconds: 8_000_000_000)
+                        } catch {
+                            return // Cancelled because image/error arrived — nothing to do
+                        }
+                        // Sleep completed naturally — Mac never responded
+                        isRequestingScreenshot = false
+                        isScreenshotPresented = false
+                        screenshotErrorMessage = "The Mac didn't respond in time. Make sure Screen Recording is allowed in System Settings > Privacy & Security > Screen Recording."
+                    }
+                }) {
+                    ZStack {
+                        Circle()
+                            .fill(isRequestingScreenshot
+                                  ? Color.primary.opacity(0.04)
+                                  : Color.primary.opacity(0.07))
+                            .overlay(Circle().strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
+                            .frame(width: 36, height: 36)
+
+                        if isRequestingScreenshot {
+                            ProgressView()
+                                .scaleEffect(0.65)
+                                .tint(Color.primary.opacity(0.5))
+                        } else {
+                            Image(systemName: "camera.viewfinder")
+                                .font(.system(size: 16, weight: .medium))
+                                .foregroundStyle(Color.primary)
+                        }
+                    }
                 }
-                .foregroundStyle(Color.secondary)
-                .padding(.horizontal, 13)
-                .padding(.vertical, 7)
-                .background(
-                    Capsule()
-                        .fill(Color.primary.opacity(0.07))
-                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
-                )
+                .buttonStyle(.plain)
+                .disabled(isRequestingScreenshot)
+
+                // Disconnect button
+                Button(action: onDisconnect) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "minus.circle")
+                            .font(.system(size: 12))
+                        Text("Disconnect")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(Color.secondary)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule()
+                            .fill(Color.primary.opacity(0.07))
+                            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
+                    )
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
