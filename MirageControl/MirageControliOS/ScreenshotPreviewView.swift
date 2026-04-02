@@ -145,7 +145,7 @@ struct ScreenshotPreviewView: View {
                         label: "Copy",
                         color: .white
                     ) {
-                        UIPasteboard.general.image = image
+                        UIPasteboard.general.image = annotatedImage ?? image
                         toastTask?.cancel()
                         toastTask = Task { await showToast("Copied to Clipboard") }
                     }

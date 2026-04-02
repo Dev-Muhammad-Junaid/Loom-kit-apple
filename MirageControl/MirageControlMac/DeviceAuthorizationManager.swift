@@ -141,7 +141,13 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
                         self.authorize(connection: pending)
                     } else if actionIdentifier == "REJECT_ACTION" {
                         self.pendingConnections.removeAll(where: { $0.id == connectionID })
-                        self.pendingHandles.removeValue(forKey: connectionID)
+                        if let handle = self.pendingHandles.removeValue(forKey: connectionID) {
+                            Task {
+                                try? await handle.send(ControlMessage.authorizationStatus(status: "denied"))
+                                try? await Task.sleep(nanoseconds: 100_000_000)
+                                await handle.disconnect()
+                            }
+                        }
                     }
                 }
             }

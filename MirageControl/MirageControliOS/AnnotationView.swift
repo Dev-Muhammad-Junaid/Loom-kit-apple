@@ -55,7 +55,7 @@ struct AnnotationView: View {
                     .scaledToFit()
                     .frame(width: geo.size.width, height: geo.size.height)
                     .onAppear { canvasSize = geo.size }
-                    .onChange(of: geo.size) { canvasSize = $0 }
+                    .onChange(of: geo.size) { _, newSize in canvasSize = newSize }
             }
             .ignoresSafeArea()
 

@@ -36,22 +36,39 @@ final class InputInjector {
 
     // MARK: - Mouse movement
 
-    /// Moves the cursor by a relative delta (in points). Scales by sensitivity.
-    func moveCursor(dx: Float, dy: Float, sensitivity: Float = 1.5) {
+    /// Moves the cursor by a relative delta (in points).
+    /// The iPad applies user-chosen sensitivity before sending; the host
+    /// adds a subtle acceleration curve so small movements stay precise
+    /// while large swipes cover more distance — matching macOS trackpad feel.
+    func moveCursor(dx: Float, dy: Float) {
         guard isAccessibilityGranted else { return }
         let currentPos = NSEvent.mouseLocation
         // NSEvent y is flipped relative to CGDisplayBounds
         let screenHeight = NSScreen.main?.frame.height ?? 900
         let cgCurrent = CGPoint(x: currentPos.x,
                                 y: screenHeight - currentPos.y)
-        let next = CGPoint(x: cgCurrent.x + Double(dx * sensitivity),
-                           y: cgCurrent.y + Double(dy * sensitivity))
+
+        let accelDx = applyAcceleration(dx)
+        let accelDy = applyAcceleration(dy)
+
+        let next = CGPoint(x: cgCurrent.x + Double(accelDx),
+                           y: cgCurrent.y + Double(accelDy))
         let clamped = clamp(next)
         let event = CGEvent(mouseEventSource: nil,
                             mouseType: .mouseMoved,
                             mouseCursorPosition: clamped,
                             mouseButton: .left)
         event?.post(tap: .cghidEventTap)
+    }
+
+    /// macOS-style pointer acceleration: small deltas stay 1:1,
+    /// large swipes ramp up for fast traversal.
+    private func applyAcceleration(_ delta: Float) -> Float {
+        let magnitude = abs(delta)
+        // Below 3pt of movement, keep 1:1 for precision work.
+        // Above that, gently ramp up to feel natural on large screens.
+        let factor: Float = magnitude < 3 ? 1.0 : 1.0 + (magnitude - 3) * 0.12
+        return delta * factor
     }
 
     // MARK: - Scroll
@@ -119,7 +136,7 @@ final class InputInjector {
         if let down = NSEvent.otherEvent(
             with: .systemDefined,
             location: .zero,
-            modifierFlags: [(keyType == NX_KEYTYPE_PLAY || keyType == NX_KEYTYPE_NEXT || keyType == NX_KEYTYPE_PREVIOUS) ? NSEvent.ModifierFlags(rawValue: 0) : .init()],
+            modifierFlags: [],
             timestamp: 0,
             windowNumber: 0,
             context: nil,
@@ -134,7 +151,7 @@ final class InputInjector {
         if let up = NSEvent.otherEvent(
             with: .systemDefined,
             location: .zero,
-            modifierFlags: [(keyType == NX_KEYTYPE_PLAY || keyType == NX_KEYTYPE_NEXT || keyType == NX_KEYTYPE_PREVIOUS) ? NSEvent.ModifierFlags(rawValue: 0) : .init()],
+            modifierFlags: [],
             timestamp: 0,
             windowNumber: 0,
             context: nil,
