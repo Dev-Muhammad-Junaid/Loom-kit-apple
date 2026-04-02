@@ -71,8 +71,11 @@ final class ControlReceiver {
             
         case .requestScreenshot:
             await handleScreenshotRequest(handle: handle)
-            
-        case .authorizationStatus, .screenshotData, .screenshotError, .activeAppUpdate:
+
+        case .requestAppList:
+            await handleAppListRequest(handle: handle)
+
+        case .authorizationStatus, .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse:
             // Client-bound messages; host doesn't process them locally
             break
         }
@@ -144,6 +147,32 @@ final class ControlReceiver {
     }
 
     private func dispatchMacro(id: String) async {
+        // System-level triggers that can't be done via CGEvent keyboard shortcuts
+        switch id {
+        case "missioncontrol_trigger":
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            proc.arguments = ["-a", "Mission Control"]
+            try? proc.run()
+            return
+        case "expose_trigger":
+            // App Exposé isn't a standalone app — trigger via AppleScript
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            proc.arguments = ["-e", "tell application \"System Events\" to key code 125 using control down"]
+            try? proc.run()
+            return
+        case "launchpad_trigger":
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            proc.arguments = ["-a", "Launchpad"]
+            try? proc.run()
+            return
+        default:
+            break
+        }
+
+        // Standard MacroItem lookup
         if let item = MacroItem.defaultDeck.first(where: { $0.id == id }) {
             switch item {
             case .app(let app):
@@ -159,6 +188,14 @@ final class ControlReceiver {
                 }
             }
         }
+    }
+
+    // MARK: - App List
+
+    private func handleAppListRequest(handle: LoomConnectionHandle) async {
+        let apps = InstalledAppScanner.shared.installedApps()
+        let message = ControlMessage.appListResponse(apps: apps)
+        try? await handle.send(try JSONEncoder().encode(message))
     }
 
     func removeConnection(id: UUID) {

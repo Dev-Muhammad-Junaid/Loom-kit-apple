@@ -18,6 +18,7 @@ struct ControlView: View {
 
     // Bidirectional state
     @State private var activeAppName: String?
+    @State private var installedApps: [InstalledAppInfo] = []
     @State private var screenshotImage: UIImage?
     @State private var isRequestingScreenshot = false   // in-flight guard
     @State private var isScreenshotPresented = false
@@ -26,7 +27,7 @@ struct ControlView: View {
 
     enum Tab: String, CaseIterable {
         case trackpad   = "Trackpad"
-        case streamdeck = "Stream Deck"
+        case streamdeck = "Apps"
 
         var icon: String {
             switch self {
@@ -69,7 +70,7 @@ struct ControlView: View {
                         case .trackpad:
                             TrackpadView(sender: sender, colorScheme: colorScheme)
                         case .streamdeck:
-                            StreamDeckGridView(sender: sender, colorScheme: colorScheme)
+                            StreamDeckGridView(sender: sender, colorScheme: colorScheme, installedApps: installedApps)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -123,7 +124,14 @@ struct ControlView: View {
             Text(screenshotErrorMessage ?? "")
         }
         .task {
-            sender = TrackpadSender(handle: connection)
+            let s = TrackpadSender(handle: connection)
+            sender = s
+            // Load cached app list for instant display
+            if let cached = Self.loadCachedAppList() {
+                installedApps = cached
+            }
+            // Then request fresh list from Mac
+            Task { await s.requestAppList() }
             // Single consolidated message loop — no competing consumers
             await listenForHostMessages()
         }
@@ -167,6 +175,13 @@ struct ControlView: View {
                     isRequestingScreenshot = false
                     isScreenshotPresented = false
                     screenshotErrorMessage = message
+
+                case let .appListResponse(apps):
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        installedApps = apps
+                    }
+                    // Cache to disk for instant display on next connect
+                    Self.cacheAppList(apps)
 
                 default:
                     break
@@ -336,5 +351,30 @@ private struct TabPill: View {
             )
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - App List Caching
+
+extension ControlView {
+    private static var appListCacheURL: URL {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        return caches.appendingPathComponent("mirage_installed_apps.json")
+    }
+
+    static func cacheAppList(_ apps: [InstalledAppInfo]) {
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(apps) {
+                try? await data.write(to: appListCacheURL, options: .atomic)
+            }
+        }
+    }
+
+    static func loadCachedAppList() -> [InstalledAppInfo]? {
+        guard let data = try? Data(contentsOf: appListCacheURL),
+              let apps = try? JSONDecoder().decode([InstalledAppInfo].self, from: data) else {
+            return nil
+        }
+        return apps
     }
 }

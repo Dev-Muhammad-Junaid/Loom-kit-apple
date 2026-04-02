@@ -24,16 +24,21 @@ public enum ControlMessage: Codable, Sendable {
     case screenshotError(message: String)
     case activeAppUpdate(name: String, bundleID: String?)
 
+    // App Launcher
+    case requestAppList
+    case appListResponse(apps: [InstalledAppInfo])
+
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, id, status, action, data, name, message
+        case type, dx, dy, button, keys, bundleID, id, status, action, data, name, message, apps
     }
 
     private enum MessageType: String, Codable {
         case mouseDelta, mouseScroll, mouseClick, mouseDoubleClick
         case keyboardShortcut, launchApp, macroButton, authorizationStatus
         case requestScreenshot, mediaCommand, screenshotData, screenshotError, activeAppUpdate
+        case requestAppList, appListResponse
     }
 
     public init(from decoder: Decoder) throws {
@@ -69,6 +74,10 @@ public enum ControlMessage: Codable, Sendable {
         case .activeAppUpdate:
             self = .activeAppUpdate(name: try c.decode(String.self, forKey: .name),
                                     bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID))
+        case .requestAppList:
+            self = .requestAppList
+        case .appListResponse:
+            self = .appListResponse(apps: try c.decode([InstalledAppInfo].self, forKey: .apps))
         }
     }
 
@@ -114,6 +123,11 @@ public enum ControlMessage: Codable, Sendable {
             try c.encode(MessageType.activeAppUpdate, forKey: .type)
             try c.encode(name, forKey: .name)
             try c.encodeIfPresent(bundleID, forKey: .bundleID)
+        case .requestAppList:
+            try c.encode(MessageType.requestAppList, forKey: .type)
+        case let .appListResponse(apps):
+            try c.encode(MessageType.appListResponse, forKey: .type)
+            try c.encode(apps, forKey: .apps)
         }
     }
 }

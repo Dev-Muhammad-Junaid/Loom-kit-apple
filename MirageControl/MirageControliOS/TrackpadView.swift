@@ -11,22 +11,11 @@ struct TrackpadView: View {
     let sender: TrackpadSender
     let colorScheme: ColorScheme
 
-    @State private var scrollMode = false
-    @State private var lastDragLocation: CGPoint?
     @State private var sensitivity: Float = 1.8
+    @State private var scrollMode: Bool = false
+    @State private var activeGesture: TrackpadGestureKind?
     @State private var ripplePos: CGPoint?
     @State private var rippleVisible = false
-
-    // Custom Gesture State — CACurrentMediaTime for monotonic precision
-    @State private var touchStartTime: Double = 0
-    @State private var touchStartLocation: CGPoint?
-    @State private var longPressTask: Task<Void, Never>?
-    @State private var lastTapTime: Double = 0
-
-    // Pre-allocated haptic generators — eliminates ~10ms alloc latency per tap
-    private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
-    private let mediumHaptic = UIImpactFeedbackGenerator(style: .medium)
-    private let heavyHaptic = UIImpactFeedbackGenerator(style: .heavy)
 
     private var bg: Color {
         colorScheme == .dark ? Color(hex: "0A0A0F") : Color(UIColor.systemGroupedBackground)
@@ -51,25 +40,66 @@ struct TrackpadView: View {
                     )
                     .shadow(color: surfaceShadowColor, radius: 16, y: 8)
 
-                // Mode label
+                // Multi-touch surface — replaces the old DragGesture
+                MultiTouchTrackpad(
+                    callbacks: TrackpadCallbacks(
+                        onCursorDelta: { dx, dy in
+                            Task { await sender.sendMouseDelta(dx: dx, dy: dy) }
+                        },
+                        onScrollDelta: { dx, dy in
+                            Task { await sender.sendScroll(dx: dx, dy: dy) }
+                        },
+                        onThreeFingerSwipe: { direction in
+                            Task { await sender.sendThreeFingerSwipe(direction) }
+                        },
+                        onTap: { pos in
+                            Task { await sender.sendClick(.left) }
+                            triggerRipple(at: pos)
+                        },
+                        onDoubleTap: { pos in
+                            Task { await sender.sendDoubleClick(.left) }
+                            triggerRipple(at: pos)
+                        },
+                        onLongPress: { pos in
+                            Task { await sender.sendClick(.right) }
+                            triggerRipple(at: pos)
+                        },
+                        onGestureChanged: { gesture in
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                activeGesture = gesture
+                            }
+                        }
+                    ),
+                    sensitivity: sensitivity,
+                    scrollMode: scrollMode
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 28))
+
+                // ── Gesture indicator (top-left corner) ──────────────
                 VStack {
                     HStack {
+                        if let gesture = activeGesture {
+                            GestureIndicator(gesture: gesture, colorScheme: colorScheme)
+                                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        }
                         Spacer()
+
+                        // Mode hint label
                         VStack(alignment: .trailing, spacing: 4) {
                             Text(scrollMode ? "Scroll Mode" : "Trackpad")
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                                 .foregroundStyle(Color.secondary.opacity(0.7))
-                            
-                            Text("Tap • Left  |  Long Press • Right")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(Color.secondary.opacity(0.5))
+                            Text("Tap • Left  |  Hold • Right  |  2F • Scroll  |  3F • Spaces")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(Color.secondary.opacity(0.45))
                         }
                         .padding(12)
                     }
                     Spacer()
                 }
+                .allowsHitTesting(false)
 
-                // Ripple effect on tap
+                // ── Ripple effect on tap ──────────────────────────────
                 if let pos = ripplePos, rippleVisible {
                     Circle()
                         .fill(Color(hex: "6C63FF").opacity(0.35))
@@ -99,15 +129,6 @@ struct TrackpadView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        handleDragChange(value)
-                    }
-                    .onEnded { value in
-                        handleDragEnded(value)
-                    }
-            )
             .padding(.horizontal, 20)
             .padding(.top, 16)
 
@@ -134,100 +155,74 @@ struct TrackpadView: View {
         .background(bg)
     }
 
-    // MARK: - Drag handling
-
-    private func handleDragChange(_ value: DragGesture.Value) {
-        let current = value.location
-
-        // Detect new touch boundary
-        if touchStartTime == 0 {
-            touchStartTime = CACurrentMediaTime()
-            touchStartLocation = current
-            // Prepare haptics ahead of time for zero-latency feedback
-            mediumHaptic.prepare()
-            heavyHaptic.prepare()
-
-            // Schedule long press right click evaluation
-            longPressTask?.cancel()
-            longPressTask = Task {
-                try? await Task.sleep(nanoseconds: 400_000_000)
-                guard !Task.isCancelled else { return }
-                // Reached time threshold without large movement
-                await sender.sendClick(.right)
-
-                await MainActor.run {
-                    heavyHaptic.impactOccurred()
-                    triggerRipple(at: current)
-                }
-            }
-        }
-
-        // Evaluate drift distance to invalidate stationary taps/holds
-        if let startLoc = touchStartLocation {
-            let distance = hypot(current.x - startLoc.x, current.y - startLoc.y)
-            if distance > 6 {
-                // User is firmly dragging, cancel tap/hold interpretation
-                longPressTask?.cancel()
-                touchStartLocation = nil
-            }
-        }
-
-        // Standard delta math for network
-        guard let last = lastDragLocation else {
-            lastDragLocation = current
-            return
-        }
-        let dx = Float(current.x - last.x)
-        let dy = Float(current.y - last.y)
-        lastDragLocation = current
-
-        Task {
-            if scrollMode {
-                await sender.sendScroll(dx: dx * 0.5, dy: dy * 0.5)
-            } else {
-                await sender.sendMouseDelta(dx: dx * sensitivity, dy: dy * sensitivity)
-            }
-        }
-    }
-
-    private func handleDragEnded(_ value: DragGesture.Value) {
-        lastDragLocation = nil
-        longPressTask?.cancel()
-
-        if touchStartTime > 0, let startLoc = touchStartLocation {
-            let duration = CACurrentMediaTime() - touchStartTime
-            // If released extremely fast without moving past the 6pt radius deadzone
-            if duration < 0.3 {
-                let now = CACurrentMediaTime()
-                if lastTapTime > 0, (now - lastTapTime) < 0.35 {
-                    // Double Tap — two quick medium impacts
-                    Task { await sender.sendDoubleClick(.left) }
-                    triggerRipple(at: startLoc)
-                    lastTapTime = 0
-                    mediumHaptic.impactOccurred()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                        mediumHaptic.impactOccurred()
-                    }
-                } else {
-                    // Single Tap — medium impact
-                    Task { await sender.sendClick(.left) }
-                    lastTapTime = now
-                    mediumHaptic.impactOccurred()
-                }
-            }
-        }
-
-        touchStartTime = 0
-        touchStartLocation = nil
-    }
+    // MARK: - Ripple
 
     private func triggerRipple(at pos: CGPoint) {
-        // Reset state so the circle reappears small/opaque,
-        // then onAppear drives the expand-and-fade animation.
         rippleVisible = false
         ripplePos = pos
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
             rippleVisible = true
+        }
+    }
+}
+
+// MARK: - Gesture Indicator Overlay
+
+private struct GestureIndicator: View {
+    let gesture: TrackpadGestureKind
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: iconName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(iconColor)
+            Text(label)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary.opacity(0.8))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            Capsule()
+                .fill(colorScheme == .dark ? .white.opacity(0.1) : .black.opacity(0.06))
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        )
+        .padding(12)
+    }
+
+    private var iconName: String {
+        switch gesture {
+        case .cursor: "hand.point.up.left"
+        case .scroll: "arrow.up.and.down"
+        case .threeFingerSwipe(let dir):
+            switch dir {
+            case .left:  "arrow.left"
+            case .right: "arrow.right"
+            case .up:    "arrow.up"
+            case .down:  "arrow.down"
+            }
+        }
+    }
+
+    private var label: String {
+        switch gesture {
+        case .cursor: "Cursor"
+        case .scroll: "Scrolling"
+        case .threeFingerSwipe(let dir):
+            switch dir {
+            case .left, .right: "Spaces"
+            case .up:           "Mission Control"
+            case .down:         "App Exposé"
+            }
+        }
+    }
+
+    private var iconColor: Color {
+        switch gesture {
+        case .cursor: Color(hex: "6C63FF")
+        case .scroll: Color(hex: "10B981")
+        case .threeFingerSwipe: Color(hex: "38BDF8")
         }
     }
 }
@@ -241,6 +236,9 @@ struct GestureButtonBar: View {
 
     var body: some View {
         HStack(spacing: 0) {
+            // Scroll mode toggle — highlighted when active
+            ScrollToggleButton(isActive: $scrollMode, colorScheme: colorScheme)
+
             GestureButton(label: "Left Click",   icon: "cursorarrow.click",              color: Color(hex: "6C63FF"), haptic: .medium, colorScheme: colorScheme) {
                 Task { await sender.sendClick(.left) }
             }
@@ -250,22 +248,48 @@ struct GestureButtonBar: View {
             GestureButton(label: "Double Click", icon: "cursorarrow.click.badge.clock",  color: Color(hex: "818CF8"), haptic: .double, colorScheme: colorScheme) {
                 Task { await sender.sendDoubleClick(.left) }
             }
-            GestureButton(
-                label: scrollMode ? "Scroll On" : "Scroll",
-                icon:  scrollMode ? "arrow.up.and.down.and.sparkles" : "arrow.up.and.down",
-                color: scrollMode ? Color(hex: "10B981") : Color.secondary,
-                haptic: .selection,
-                colorScheme: colorScheme
-            ) {
-                scrollMode.toggle()
-            }
             GestureButton(label: "Mission", icon: "macwindow.on.rectangle", color: Color(hex: "38BDF8"), haptic: .light, colorScheme: colorScheme) {
-                Task { await sender.sendShortcut(["ctrl", "up"]) }
+                Task { await sender.sendMacro("missioncontrol_trigger") }
             }
             GestureButton(label: "Desktop", icon: "menubar.rectangle",       color: Color(hex: "34D399"), haptic: .light, colorScheme: colorScheme) {
                 Task { await sender.sendShortcut(["fn", "f11"]) }
             }
         }
+    }
+}
+
+/// Dedicated scroll toggle with active state highlight.
+private struct ScrollToggleButton: View {
+    @Binding var isActive: Bool
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        Button {
+            withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) {
+                isActive.toggle()
+            }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: isActive ? "scroll.fill" : "scroll")
+                    .font(.system(size: 28, weight: .thin))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isActive ? Color(hex: "10B981") : Color(hex: "10B981").opacity(0.6))
+                    .frame(height: 34)
+                Text("Scroll")
+                    .font(.system(size: 8.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(isActive ? Color(hex: "10B981") : Color.secondary.opacity(0.8))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 62)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(isActive ? Color(hex: "10B981").opacity(colorScheme == .dark ? 0.15 : 0.1) : Color.clear)
+            )
+            .scaleEffect(isActive ? 0.95 : 1.0)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -340,6 +364,3 @@ struct GestureButton: View {
         )
     }
 }
-
-
-
