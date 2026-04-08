@@ -54,6 +54,8 @@ public struct LoomContainerConfiguration: Sendable {
     public let transferConfiguration: LoomTransferConfiguration
     /// Policy used when racing direct candidates before signaling fallback.
     public let directConnectionPolicy: LoomDirectConnectionPolicy
+    /// Automatic reconnection policy applied when a managed connection drops unexpectedly.
+    public let retryPolicy: LoomRetryPolicy
 
     /// Creates a SwiftUI-first LoomKit runtime configuration.
     public init(
@@ -71,7 +73,8 @@ public struct LoomContainerConfiguration: Sendable {
         bootstrapMetadataProvider: BootstrapMetadataProvider? = nil,
         remoteSessionID: String? = nil,
         transferConfiguration: LoomTransferConfiguration = .default,
-        directConnectionPolicy: LoomDirectConnectionPolicy = .default
+        directConnectionPolicy: LoomDirectConnectionPolicy = .default,
+        retryPolicy: LoomRetryPolicy = .default
     ) {
         self.serviceType = serviceType
         self.serviceName = serviceName
@@ -95,5 +98,6 @@ public struct LoomContainerConfiguration: Sendable {
         self.remoteSessionID = remoteSessionID
         self.transferConfiguration = transferConfiguration
         self.directConnectionPolicy = directConnectionPolicy
+        self.retryPolicy = retryPolicy
     }
 }

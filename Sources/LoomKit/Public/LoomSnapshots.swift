@@ -154,6 +154,8 @@ public struct LoomConnectionSnapshot: Identifiable, Hashable, Sendable {
         case disconnected
         /// The connection failed and surfaced an error.
         case failed
+        /// The connection dropped and an automatic reconnection attempt is in progress.
+        case reconnecting
     }
 
     /// Stable LoomKit connection identifier.
@@ -306,4 +308,6 @@ public enum LoomConnectionEvent: Sendable {
     case message(Data)
     /// Reports final disconnection and optional error text.
     case disconnected(String?)
+    /// Reports that an automatic reconnection attempt is starting.
+    case reconnecting(attempt: Int, maxAttempts: Int)
 }

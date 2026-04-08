@@ -27,6 +27,12 @@ struct LoomStoreSnapshot: Sendable {
 private struct ManagedConnection: Sendable {
     let handle: LoomConnectionHandle
     let signalingSessionID: String?
+    let peerSnapshot: LoomPeerSnapshot
+}
+
+private struct RetryState {
+    var attempt: Int = 0
+    var task: Task<Void, Never>?
 }
 
 enum LoomStoreError: LocalizedError, Sendable {
@@ -101,6 +107,7 @@ actor LoomStore {
     private var hostSnapshot: LoomHostStateSnapshot?
     private var hostStateTask: Task<Void, Never>?
     private var hostIncomingTask: Task<Void, Never>?
+    private var retryStates: [UUID: RetryState] = [:]
 
     init(
         configuration: LoomContainerConfiguration,
@@ -558,18 +565,76 @@ actor LoomStore {
         id: UUID,
         errorMessage: String?
     ) async {
-        if let signalingSessionID = connections[id]?.signalingSessionID,
+        let managed = connections[id]
+
+        if let signalingSessionID = managed?.signalingSessionID,
            let signalingClient {
             try? await signalingClient.leaveSession(sessionID: signalingSessionID)
         }
 
+        let wasFailure = errorMessage != nil
+        let policy = configuration.retryPolicy
+        let currentAttempt = retryStates[id]?.attempt ?? 0
+
+        if wasFailure,
+           !policy.isDisabled,
+           currentAttempt < policy.maxAttempts,
+           let managed,
+           let existingSnapshot = connectionSnapshots[id] {
+            let attempt = currentAttempt + 1
+            LoomLogger.log(
+                .transport,
+                "LoomKit auto-reconnect attempt \(attempt)/\(policy.maxAttempts) for \(existingSnapshot.peerName)"
+            )
+            LoomInstrumentation.record(
+                LoomStepEvent(rawValue: "loomkit.reconnect.attempt.\(attempt)")
+            )
+
+            connectionSnapshots[id] = LoomConnectionSnapshot(
+                id: existingSnapshot.id,
+                peerID: existingSnapshot.peerID,
+                peerName: existingSnapshot.peerName,
+                state: .reconnecting,
+                transportKind: existingSnapshot.transportKind,
+                connectedAt: existingSnapshot.connectedAt,
+                lastError: errorMessage
+            )
+            connections.removeValue(forKey: id)
+            transferSnapshots = transferSnapshots.filter { $0.value.connectionID != id }
+            await notifyStateChanged()
+
+            let delay = policy.delay(forAttempt: attempt - 1)
+            let peerSnapshot = managed.peerSnapshot
+            let signalingSessionID = managed.signalingSessionID
+
+            retryStates[id] = RetryState(
+                attempt: attempt,
+                task: Task { [weak self] in
+                    do {
+                        try await Task.sleep(for: delay)
+                    } catch {
+                        return
+                    }
+                    guard let self else { return }
+                    await self.executeRetry(
+                        originalConnectionID: id,
+                        peer: peerSnapshot,
+                        signalingSessionID: signalingSessionID
+                    )
+                }
+            )
+            return
+        }
+
+        retryStates[id]?.task?.cancel()
+        retryStates.removeValue(forKey: id)
         connections.removeValue(forKey: id)
         if let existingSnapshot = connectionSnapshots[id] {
             connectionSnapshots[id] = LoomConnectionSnapshot(
                 id: existingSnapshot.id,
                 peerID: existingSnapshot.peerID,
                 peerName: existingSnapshot.peerName,
-                state: errorMessage == nil ? .disconnected : .failed,
+                state: wasFailure ? .failed : .disconnected,
                 transportKind: existingSnapshot.transportKind,
                 connectedAt: existingSnapshot.connectedAt,
                 lastError: errorMessage
@@ -578,6 +643,107 @@ actor LoomStore {
         }
         transferSnapshots = transferSnapshots.filter { $0.value.connectionID != id }
         await notifyStateChanged()
+    }
+
+    private func executeRetry(
+        originalConnectionID id: UUID,
+        peer: LoomPeerSnapshot,
+        signalingSessionID: String?
+    ) async {
+        guard connectionSnapshots[id] != nil else {
+            retryStates.removeValue(forKey: id)
+            return
+        }
+
+        do {
+            let resolvedPeer = currentPeerSnapshot(for: peer.id) ?? peer
+            let localPeer = localPeersByID[resolvedPeer.id]
+            let overlayPeer = localPeer == nil ? overlayPeersByID[resolvedPeer.id] : nil
+            let effectiveSignaling = signalingSessionID
+                ?? LoomConnectionCoordinator.signalingFallbackSessionID(
+                    advertisedSignalingSessionID: resolvedPeer.signalingSessionID,
+                    localPeer: localPeer,
+                    overlayPeer: overlayPeer
+                )
+
+            guard localPeer != nil || overlayPeer != nil || effectiveSignaling != nil else {
+                throw LoomStoreError.peerNotFound(resolvedPeer.id)
+            }
+
+            let newHandle = try await connect(
+                preferredPeer: resolvedPeer,
+                localPeer: localPeer,
+                overlayPeer: overlayPeer,
+                signalingSessionID: effectiveSignaling
+            )
+
+            connectionSnapshots.removeValue(forKey: id)
+            retryStates.removeValue(forKey: id)
+
+            LoomLogger.log(
+                .transport,
+                "LoomKit auto-reconnect succeeded for \(peer.name)"
+            )
+            LoomInstrumentation.record(
+                LoomStepEvent(rawValue: "loomkit.reconnect.success")
+            )
+
+            incomingConnectionBroadcaster.yield(newHandle)
+            await notifyStateChanged()
+        } catch {
+            LoomLogger.debug(
+                .transport,
+                "LoomKit auto-reconnect failed for \(peer.name): \(error.localizedDescription)"
+            )
+
+            let attempt = retryStates[id]?.attempt ?? 0
+            let policy = configuration.retryPolicy
+
+            if attempt >= policy.maxAttempts {
+                if let existing = connectionSnapshots[id] {
+                    connectionSnapshots[id] = LoomConnectionSnapshot(
+                        id: existing.id,
+                        peerID: existing.peerID,
+                        peerName: existing.peerName,
+                        state: .failed,
+                        transportKind: existing.transportKind,
+                        connectedAt: existing.connectedAt,
+                        lastError: "Reconnection failed after \(attempt) attempts: \(error.localizedDescription)"
+                    )
+                    connectionSnapshots.removeValue(forKey: id)
+                }
+                retryStates.removeValue(forKey: id)
+                LoomInstrumentation.record(
+                    LoomStepEvent(rawValue: "loomkit.reconnect.exhausted")
+                )
+            } else {
+                let nextAttempt = attempt + 1
+                let delay = policy.delay(forAttempt: nextAttempt - 1)
+                retryStates[id] = RetryState(
+                    attempt: nextAttempt,
+                    task: Task { [weak self] in
+                        do {
+                            try await Task.sleep(for: delay)
+                        } catch {
+                            return
+                        }
+                        guard let self else { return }
+                        await self.executeRetry(
+                            originalConnectionID: id,
+                            peer: peer,
+                            signalingSessionID: signalingSessionID
+                        )
+                    }
+                )
+            }
+            await notifyStateChanged()
+        }
+    }
+
+    /// Cancels any in-flight retry for a specific connection.
+    func cancelRetry(connectionID: UUID) {
+        retryStates[connectionID]?.task?.cancel()
+        retryStates.removeValue(forKey: connectionID)
     }
 
     private func startRemoteHosting(
@@ -850,7 +1016,8 @@ actor LoomStore {
         )
         connections[connectionID] = ManagedConnection(
             handle: handle,
-            signalingSessionID: signalingSessionID
+            signalingSessionID: signalingSessionID,
+            peerSnapshot: peerSnapshot
         )
         connectionSnapshots[connectionID] = LoomConnectionSnapshot(
             id: connectionID,

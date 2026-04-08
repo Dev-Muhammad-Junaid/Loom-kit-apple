@@ -11,8 +11,13 @@ import Foundation
 /// Bonjour discovery and advertising to work. Fires `assertionFailure` in
 /// debug builds so developers see a clear message instead of the opaque
 /// NWBrowser `-65555 (NoAuth)` error.
+///
+/// Skips the assertion when running inside a test runner (XCTest or Swift Testing)
+/// to avoid crashing the test process for tests that exercise Bonjour codepaths.
 func validateBonjourInfoPlistKeys(serviceType: String) {
     #if DEBUG
+    guard !isRunningInTestContext else { return }
+
     let info = Bundle.main.infoDictionary
 
     if let services = info?["NSBonjourServices"] as? [String] {
@@ -63,3 +68,14 @@ func validateBonjourInfoPlistKeys(serviceType: String) {
     }
     #endif
 }
+
+private let isRunningInTestContext: Bool = {
+    NSClassFromString("XCTestCase") != nil
+        || NSClassFromString("XCTest") != nil
+        || ProcessInfo.processInfo.environment["XCTestBundlePath"] != nil
+        || ProcessInfo.processInfo.environment["XCTestSessionIdentifier"] != nil
+        || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+        || ProcessInfo.processInfo.arguments.contains(where: { $0.contains("xctest") || $0.contains(".xctest") })
+        || Bundle.main.bundlePath.hasSuffix(".xctest")
+        || ProcessInfo.processInfo.processName == "xctest"
+}()
