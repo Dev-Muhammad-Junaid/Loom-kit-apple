@@ -12,6 +12,26 @@ import Foundation
 /// Uses a token-bucket algorithm: tokens refill at a steady rate up to a
 /// maximum burst size. Each message consumes one token. When the bucket is
 /// empty, excess messages are dropped and logged.
+///
+/// The default policy is ``unlimited`` — no messages are dropped. Use one of
+/// the built-in presets or create a custom policy if your app needs to protect
+/// against flood scenarios:
+///
+/// ```swift
+/// // Real-time apps (trackpad, screen sharing): use unlimited (the default)
+/// LoomContainerConfiguration(serviceName: "MyApp")
+///
+/// // Messaging/chat apps: use a moderate policy
+/// LoomContainerConfiguration(
+///     serviceName: "MyApp",
+///     messageRateLimitPolicy: .moderate
+/// )
+/// ```
+///
+/// > Important: Setting a rate limit that is too low for your app's message
+/// > frequency will cause silent message drops. High-throughput features like
+/// > trackpad input (60-120 Hz), screen sharing, or real-time audio relay
+/// > should use ``unlimited`` or a sufficiently high custom policy.
 public struct LoomMessageRateLimitPolicy: Sendable, Hashable {
     /// Maximum burst size (bucket capacity).
     public var maxBurst: Int
@@ -24,16 +44,31 @@ public struct LoomMessageRateLimitPolicy: Sendable, Hashable {
     /// - Parameters:
     ///   - maxBurst: Peak messages accepted before throttling. Must be >= 1.
     ///   - refillRate: Tokens restored per second. Must be > 0.
-    public init(maxBurst: Int = 100, refillRate: Double = 50.0) {
+    public init(maxBurst: Int = .max, refillRate: Double = .infinity) {
         self.maxBurst = max(maxBurst, 1)
         self.refillRate = max(refillRate, 0.1)
     }
 
-    /// Allows 100 messages in a burst, refilling at 50/second.
-    public static let `default` = LoomMessageRateLimitPolicy()
+    /// No rate limiting — all incoming messages are delivered. This is the default.
+    ///
+    /// Suitable for real-time apps such as remote control, screen sharing, or
+    /// audio relay where message throughput must not be artificially limited.
+    public static let `default` = unlimited
 
     /// No rate limiting.
     public static let unlimited = LoomMessageRateLimitPolicy(maxBurst: .max, refillRate: .infinity)
+
+    /// Moderate rate limit: 500-message burst, 200 messages/sec steady state.
+    ///
+    /// Suitable for chat or document-sync apps where occasional high bursts
+    /// are expected but sustained flooding is not.
+    public static let moderate = LoomMessageRateLimitPolicy(maxBurst: 500, refillRate: 200.0)
+
+    /// Strict rate limit: 100-message burst, 50 messages/sec steady state.
+    ///
+    /// Suitable for low-frequency control channels or apps that want aggressive
+    /// protection against misbehaving peers.
+    public static let strict = LoomMessageRateLimitPolicy(maxBurst: 100, refillRate: 50.0)
 }
 
 /// Token-bucket rate limiter for actor-isolated use inside LoomConnectionHandle.

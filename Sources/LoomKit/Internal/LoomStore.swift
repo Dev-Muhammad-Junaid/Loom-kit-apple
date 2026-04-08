@@ -24,10 +24,20 @@ struct LoomStoreSnapshot: Sendable {
     let lastErrorMessage: String?
 }
 
+/// Whether the local device initiated this connection or accepted it.
+enum LoomConnectionOrigin: String, Sendable {
+    /// Connection was started by the local device calling connect().
+    case outgoing
+    /// Connection was accepted from a remote peer.
+    case incoming
+}
+
 private struct ManagedConnection: Sendable {
     let handle: LoomConnectionHandle
     let signalingSessionID: String?
     let peerSnapshot: LoomPeerSnapshot
+    let origin: LoomConnectionOrigin
+    let registeredAt: ContinuousClock.Instant
 }
 
 private struct RetryState {
@@ -108,6 +118,7 @@ actor LoomStore {
     private var hostStateTask: Task<Void, Never>?
     private var hostIncomingTask: Task<Void, Never>?
     private var retryStates: [UUID: RetryState] = [:]
+    private var manuallyCancelledConnectionIDs = Set<UUID>()
 
     init(
         configuration: LoomContainerConfiguration,
@@ -372,6 +383,16 @@ actor LoomStore {
             try await start()
         }
 
+        if hasActiveConnection(for: peerSnapshot.id) {
+            if let existing = connections.first(where: { $0.value.peerSnapshot.id == peerSnapshot.id }) {
+                LoomLogger.debug(
+                    .transport,
+                    "LoomKit returning existing connection for \(peerSnapshot.name)"
+                )
+                return existing.value.handle
+            }
+        }
+
         let resolvedPeer = currentPeerSnapshot(for: peerSnapshot.id) ?? peerSnapshot
         let localPeer = localPeersByID[resolvedPeer.id]
         let overlayPeer = localPeer == nil ? overlayPeersByID[resolvedPeer.id] : nil
@@ -427,6 +448,8 @@ actor LoomStore {
         guard let managedConnection = connections[connectionID] else {
             return
         }
+        manuallyCancelledConnectionIDs.insert(connectionID)
+        cancelRetry(connectionID: connectionID)
         await managedConnection.handle.disconnect()
     }
 
@@ -573,12 +596,30 @@ actor LoomStore {
         }
 
         let wasFailure = errorMessage != nil
+        let wasManualDisconnect = manuallyCancelledConnectionIDs.remove(id) != nil
+        let isIncoming = managed?.origin == .incoming
         let policy = configuration.retryPolicy
         let currentAttempt = retryStates[id]?.attempt ?? 0
 
-        if wasFailure,
-           !policy.isDisabled,
-           currentAttempt < policy.maxAttempts,
+        let connectionUptime = managed?.registeredAt.duration(to: .now) ?? .zero
+        let wasEstablished = connectionUptime >= policy.minimumEstablishedDuration
+
+        let shouldRetry = wasFailure
+            && !wasManualDisconnect
+            && !isIncoming
+            && wasEstablished
+            && !policy.isDisabled
+            && currentAttempt < policy.maxAttempts
+
+        if wasFailure && !wasManualDisconnect && !isIncoming && !wasEstablished {
+            let peerName = connectionSnapshots[id]?.peerName ?? "unknown"
+            LoomLogger.debug(
+                .transport,
+                "LoomKit skipping retry for \(peerName) — connection was alive for \(connectionUptime) which is below \(policy.minimumEstablishedDuration) threshold"
+            )
+        }
+
+        if shouldRetry,
            let managed,
            let existingSnapshot = connectionSnapshots[id] {
             let attempt = currentAttempt + 1
@@ -744,6 +785,15 @@ actor LoomStore {
     func cancelRetry(connectionID: UUID) {
         retryStates[connectionID]?.task?.cancel()
         retryStates.removeValue(forKey: connectionID)
+    }
+
+    /// Returns `true` if a live (connected/reconnecting) connection already
+    /// exists for the given peer, enforcing at most one connection per device.
+    private func hasActiveConnection(for peerID: LoomPeerID) -> Bool {
+        connectionSnapshots.values.contains { snapshot in
+            snapshot.peerID == peerID
+                && (snapshot.state == .connected || snapshot.state == .reconnecting)
+        }
     }
 
     private func startRemoteHosting(
@@ -917,10 +967,21 @@ actor LoomStore {
                 session: session,
                 signalingSessionID: nil
             )
+
+            if hasActiveConnection(for: peerSnapshot.id) {
+                LoomLogger.log(
+                    .transport,
+                    "LoomKit rejecting duplicate incoming session from \(peerSnapshot.name) — active connection already exists"
+                )
+                await session.cancel()
+                return
+            }
+
             let handle = await registerConnection(
                 session: session,
                 peerSnapshot: peerSnapshot,
-                signalingSessionID: nil
+                signalingSessionID: nil,
+                origin: .incoming
             )
             incomingConnectionBroadcaster.yield(handle)
             await notifyStateChanged()
@@ -934,10 +995,21 @@ actor LoomStore {
         _ connection: LoomHostClientConnection
     ) async {
         let peerSnapshot = snapshot(fromHostRecord: connection.descriptor.peer)
+
+        if hasActiveConnection(for: peerSnapshot.id) {
+            LoomLogger.log(
+                .transport,
+                "LoomKit rejecting duplicate host incoming connection from \(peerSnapshot.name) — active connection already exists"
+            )
+            await connection.session.cancel()
+            return
+        }
+
         let handle = await registerConnection(
             session: connection.session,
             peerSnapshot: peerSnapshot,
-            signalingSessionID: nil
+            signalingSessionID: nil,
+            origin: .incoming
         )
         incomingConnectionBroadcaster.yield(handle)
         await notifyStateChanged()
@@ -993,7 +1065,8 @@ actor LoomStore {
     private func registerConnection(
         session: any LoomSessionProtocol,
         peerSnapshot: LoomPeerSnapshot,
-        signalingSessionID: String?
+        signalingSessionID: String?,
+        origin: LoomConnectionOrigin = .outgoing
     ) async -> LoomConnectionHandle {
         let connectionID = UUID()
         let handle = LoomConnectionHandle(
@@ -1018,7 +1091,9 @@ actor LoomStore {
         connections[connectionID] = ManagedConnection(
             handle: handle,
             signalingSessionID: signalingSessionID,
-            peerSnapshot: peerSnapshot
+            peerSnapshot: peerSnapshot,
+            origin: origin,
+            registeredAt: .now
         )
         connectionSnapshots[connectionID] = LoomConnectionSnapshot(
             id: connectionID,

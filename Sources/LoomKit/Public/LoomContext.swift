@@ -103,6 +103,10 @@ public final class LoomContext {
     }
 
     /// Disconnects a currently tracked LoomKit connection snapshot.
+    ///
+    /// The local device will not auto-retry this specific connection.
+    /// Incoming connection requests from the same peer are still accepted
+    /// normally — only the local retry loop for this connection is stopped.
     public func disconnect(_ connection: LoomConnectionSnapshot) async {
         await store.disconnect(connectionID: connection.id)
     }

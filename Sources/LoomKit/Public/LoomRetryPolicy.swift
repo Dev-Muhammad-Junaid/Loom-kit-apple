@@ -31,6 +31,11 @@ public struct LoomRetryPolicy: Sendable, Hashable {
     /// Fraction of the computed delay added as random jitter (0.0–1.0).
     public var jitterFraction: Double
 
+    /// A connection must survive at least this long before it qualifies for
+    /// automatic retry. Connections that fail faster than this threshold
+    /// (e.g. rejected during an authorization dialog) are never retried.
+    public var minimumEstablishedDuration: Duration
+
     /// Creates a retry policy.
     ///
     /// - Parameters:
@@ -39,18 +44,22 @@ public struct LoomRetryPolicy: Sendable, Hashable {
     ///   - maxDelay: Backoff ceiling.
     ///   - multiplier: Exponential growth factor.
     ///   - jitterFraction: Random jitter fraction added to each delay.
+    ///   - minimumEstablishedDuration: How long a connection must have been
+    ///     alive before retry is considered. Defaults to 10 seconds.
     public init(
         maxAttempts: Int = 5,
         baseDelay: Duration = .seconds(1),
         maxDelay: Duration = .seconds(30),
         multiplier: Double = 2.0,
-        jitterFraction: Double = 0.15
+        jitterFraction: Double = 0.15,
+        minimumEstablishedDuration: Duration = .seconds(10)
     ) {
         self.maxAttempts = max(maxAttempts, 0)
         self.baseDelay = baseDelay
         self.maxDelay = maxDelay
         self.multiplier = max(multiplier, 1.0)
         self.jitterFraction = jitterFraction.clamped(to: 0.0 ... 1.0)
+        self.minimumEstablishedDuration = minimumEstablishedDuration
     }
 
     /// Returns `true` when the policy allows no retries at all.
