@@ -17,7 +17,8 @@ public enum LoomLogLevel: String, Sendable {
 
 /// Centralized logging for Loom using Apple's unified logging system (`Logger`)
 ///
-/// Logs appear in Console.app under the "com.loom" subsystem, filtered by category.
+/// Logs appear in Console.app under the subsystem set via
+/// ``configure(subsystem:)``, defaulting to `"com.loom"`.
 ///
 /// Set `LOOM_LOG` environment variable in Xcode scheme:
 /// - `all` - Enable Loom's known categories
@@ -25,17 +26,24 @@ public enum LoomLogLevel: String, Sendable {
 /// - `relay,cloud,trust` - Enable specific categories (comma-separated raw names)
 /// - Not set - Default: essential Loom categories only
 public struct LoomLogger: Sendable {
-    /// Subsystem identifier for the system logger (appears in Console.app)
-    private static let subsystem = "com.loom"
+    private static let storage = LoggerStorage()
 
-    /// Cached system logger instances per category (created lazily)
-    private static let loggers: [LoomLogCategory: Logger] = {
-        var result: [LoomLogCategory: Logger] = [:]
-        for category in LoomLogCategory.knownCategories {
-            result[category] = Logger(subsystem: subsystem, category: category.rawValue)
-        }
-        return result
-    }()
+    /// The subsystem identifier used for all Loom log entries.
+    public static var subsystem: String {
+        storage.subsystem
+    }
+
+    /// Sets the subsystem identifier for all future log entries.
+    ///
+    /// Call this once at app launch — ideally before initializing ``LoomContainer`` — to
+    /// make Loom logs appear under your app's own subsystem in Console.app and Instruments.
+    ///
+    /// ```swift
+    /// LoomLogger.configure(subsystem: "com.myapp.loom")
+    /// ```
+    public static func configure(subsystem: String) {
+        storage.configure(subsystem: subsystem)
+    }
 
     /// Enabled log categories (evaluated once at startup from env var)
     public static let enabledCategories: Set<LoomLogCategory> = parseEnvironment()
@@ -251,7 +259,7 @@ public struct LoomLogger: Sendable {
     }
 
     private static func logger(for category: LoomLogCategory) -> Logger {
-        loggers[category] ?? Logger(subsystem: subsystem, category: category.rawValue)
+        storage.logger(for: category)
     }
 
     /// Parse LOOM_LOG environment variable
@@ -443,5 +451,40 @@ public extension LoomLogger {
             line: line,
             function: function
         )
+    }
+}
+
+private final class LoggerStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _subsystem = "com.loom"
+    private var _loggers: [LoomLogCategory: Logger] = LoggerStorage.build(subsystem: "com.loom")
+
+    var subsystem: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return _subsystem
+    }
+
+    func configure(subsystem: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        _subsystem = subsystem
+        _loggers = Self.build(subsystem: subsystem)
+    }
+
+    func logger(for category: LoomLogCategory) -> Logger {
+        lock.lock()
+        let cached = _loggers[category]
+        let sub = _subsystem
+        lock.unlock()
+        return cached ?? Logger(subsystem: sub, category: category.rawValue)
+    }
+
+    private static func build(subsystem: String) -> [LoomLogCategory: Logger] {
+        var result: [LoomLogCategory: Logger] = [:]
+        for category in LoomLogCategory.knownCategories {
+            result[category] = Logger(subsystem: subsystem, category: category.rawValue)
+        }
+        return result
     }
 }

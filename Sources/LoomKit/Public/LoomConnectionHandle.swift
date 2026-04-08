@@ -25,10 +25,16 @@ public actor LoomConnectionHandle {
     public nonisolated let events: AsyncStream<LoomConnectionEvent>
     /// Stream of offered incoming transfers before acceptance.
     public nonisolated let incomingTransfers: AsyncStream<LoomIncomingTransfer>
+    /// Stream of transport network-path snapshots observed for this connection.
+    public nonisolated let networkPathUpdates: AsyncStream<LoomSessionNetworkPathSnapshot>
+    /// Stream of periodic health snapshots derived from the transport path.
+    public nonisolated let healthUpdates: AsyncStream<LoomConnectionHealthSnapshot>
 
     private let messagesContinuation: AsyncStream<Data>.Continuation
     private let eventsContinuation: AsyncStream<LoomConnectionEvent>.Continuation
     private let incomingTransfersContinuation: AsyncStream<LoomIncomingTransfer>.Continuation
+    private let networkPathContinuation: AsyncStream<LoomSessionNetworkPathSnapshot>.Continuation
+    private let healthContinuation: AsyncStream<LoomConnectionHealthSnapshot>.Continuation
     private let onStateChanged: @Sendable (UUID, LoomConnectionSnapshot.State, String?) async -> Void
     private let onTransferChanged: @Sendable (LoomTransferSnapshot) async -> Void
     private let onDisconnected: @Sendable (UUID, String?) async -> Void
@@ -37,8 +43,12 @@ public actor LoomConnectionHandle {
     private var stateObservationTask: Task<Void, Never>?
     private var streamObservationTask: Task<Void, Never>?
     private var transferObservationTask: Task<Void, Never>?
+    private var pathObservationTask: Task<Void, Never>?
     private var transferProgressTasks: [UUID: Task<Void, Never>] = [:]
     private var transferFileURLs: [UUID: URL] = [:]
+    /// Most recently observed health snapshot. `nil` before the first path update.
+    public private(set) var latestHealth: LoomConnectionHealthSnapshot?
+    private let rateLimiter: LoomTokenBucketRateLimiter?
     private var didReportDisconnection = false
 
     init(
@@ -46,6 +56,7 @@ public actor LoomConnectionHandle {
         peer: LoomPeerSnapshot,
         session: any LoomSessionProtocol,
         transferConfiguration: LoomTransferConfiguration,
+        messageRateLimitPolicy: LoomMessageRateLimitPolicy = .default,
         onStateChanged: @escaping @Sendable (UUID, LoomConnectionSnapshot.State, String?) async -> Void,
         onTransferChanged: @escaping @Sendable (LoomTransferSnapshot) async -> Void,
         onDisconnected: @escaping @Sendable (UUID, String?) async -> Void
@@ -60,6 +71,9 @@ public actor LoomConnectionHandle {
         self.onStateChanged = onStateChanged
         self.onTransferChanged = onTransferChanged
         self.onDisconnected = onDisconnected
+        self.rateLimiter = messageRateLimitPolicy == .unlimited
+            ? nil
+            : LoomTokenBucketRateLimiter(policy: messageRateLimitPolicy)
 
         let (messages, messagesContinuation) = AsyncStream.makeStream(of: Data.self)
         self.messages = messages
@@ -72,18 +86,29 @@ public actor LoomConnectionHandle {
         let (incomingTransfers, incomingTransfersContinuation) = AsyncStream.makeStream(of: LoomIncomingTransfer.self)
         self.incomingTransfers = incomingTransfers
         self.incomingTransfersContinuation = incomingTransfersContinuation
+
+        let (networkPathUpdates, networkPathContinuation) = AsyncStream.makeStream(of: LoomSessionNetworkPathSnapshot.self)
+        self.networkPathUpdates = networkPathUpdates
+        self.networkPathContinuation = networkPathContinuation
+
+        let (healthUpdates, healthContinuation) = AsyncStream.makeStream(of: LoomConnectionHealthSnapshot.self)
+        self.healthUpdates = healthUpdates
+        self.healthContinuation = healthContinuation
     }
 
     deinit {
         stateObservationTask?.cancel()
         streamObservationTask?.cancel()
         transferObservationTask?.cancel()
+        pathObservationTask?.cancel()
         for task in transferProgressTasks.values {
             task.cancel()
         }
         messagesContinuation.finish()
         eventsContinuation.finish()
         incomingTransfersContinuation.finish()
+        networkPathContinuation.finish()
+        healthContinuation.finish()
     }
 
     func startObservers() {
@@ -98,6 +123,9 @@ public actor LoomConnectionHandle {
         }
         streamObservationTask = Task {
             await observeIncomingStreams()
+        }
+        pathObservationTask = Task {
+            await observeNetworkPath()
         }
         transferObservationTask = Task {
             await observeIncomingTransfers()
@@ -229,10 +257,30 @@ public actor LoomConnectionHandle {
                 continue
             }
             for await payload in stream.incomingBytes {
+                if let rateLimiter, !rateLimiter.tryConsume() {
+                    LoomLogger.debug(
+                        .transport,
+                        "LoomKit rate limiter dropped message (\(payload.count) bytes) on connection \(id)"
+                    )
+                    continue
+                }
                 messagesContinuation.yield(payload)
                 eventsContinuation.yield(.message(payload))
             }
         }
+    }
+
+    private func observeNetworkPath() async {
+        let pathStream = await session.makePathObserver()
+        for await snapshot in pathStream {
+            networkPathContinuation.yield(snapshot)
+            eventsContinuation.yield(.networkPathChanged(snapshot))
+            let health = LoomConnectionHealthSnapshot(from: snapshot)
+            latestHealth = health
+            healthContinuation.yield(health)
+        }
+        networkPathContinuation.finish()
+        healthContinuation.finish()
     }
 
     private func observeIncomingTransfers() async {
@@ -331,6 +379,8 @@ public actor LoomConnectionHandle {
         messagesContinuation.finish()
         eventsContinuation.finish()
         incomingTransfersContinuation.finish()
+        networkPathContinuation.finish()
+        healthContinuation.finish()
     }
 
     private static func snapshotState(for state: LoomAuthenticatedSessionState) -> LoomConnectionSnapshot.State {

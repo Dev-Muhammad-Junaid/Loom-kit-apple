@@ -310,4 +310,6 @@ public enum LoomConnectionEvent: Sendable {
     case disconnected(String?)
     /// Reports that an automatic reconnection attempt is starting.
     case reconnecting(attempt: Int, maxAttempts: Int)
+    /// Reports a transport network-path change (e.g. WiFi to cellular).
+    case networkPathChanged(LoomSessionNetworkPathSnapshot)
 }

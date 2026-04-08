@@ -1001,6 +1001,7 @@ actor LoomStore {
             peer: peerSnapshot,
             session: session,
             transferConfiguration: configuration.transferConfiguration,
+            messageRateLimitPolicy: configuration.messageRateLimitPolicy,
             onStateChanged: { [weak self] id, state, lastError in
                 guard let self else { return }
                 await self.updateConnectionState(id: id, state: state, lastError: lastError)

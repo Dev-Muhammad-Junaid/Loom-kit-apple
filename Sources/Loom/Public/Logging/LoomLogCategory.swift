@@ -44,6 +44,7 @@ public extension LoomLogCategory {
     static let bootstrap: Self = "bootstrap"
     static let ssh: Self = "ssh"
     static let wakeOnLAN: Self = "wake_on_lan"
+    static let network: Self = "network"
 
     static let knownCategories: [Self] = [
         .session,
@@ -58,6 +59,7 @@ public extension LoomLogCategory {
         .bootstrap,
         .ssh,
         .wakeOnLAN,
+        .network,
     ]
 
     static let defaultEnabledCategories: Set<Self> = [

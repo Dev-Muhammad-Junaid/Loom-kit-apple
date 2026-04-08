@@ -56,6 +56,8 @@ public struct LoomContainerConfiguration: Sendable {
     public let directConnectionPolicy: LoomDirectConnectionPolicy
     /// Automatic reconnection policy applied when a managed connection drops unexpectedly.
     public let retryPolicy: LoomRetryPolicy
+    /// Rate-limit policy for incoming messages on the default message stream.
+    public let messageRateLimitPolicy: LoomMessageRateLimitPolicy
 
     /// Creates a SwiftUI-first LoomKit runtime configuration.
     public init(
@@ -74,7 +76,8 @@ public struct LoomContainerConfiguration: Sendable {
         remoteSessionID: String? = nil,
         transferConfiguration: LoomTransferConfiguration = .default,
         directConnectionPolicy: LoomDirectConnectionPolicy = .default,
-        retryPolicy: LoomRetryPolicy = .default
+        retryPolicy: LoomRetryPolicy = .default,
+        messageRateLimitPolicy: LoomMessageRateLimitPolicy = .default
     ) {
         self.serviceType = serviceType
         self.serviceName = serviceName
@@ -99,5 +102,6 @@ public struct LoomContainerConfiguration: Sendable {
         self.transferConfiguration = transferConfiguration
         self.directConnectionPolicy = directConnectionPolicy
         self.retryPolicy = retryPolicy
+        self.messageRateLimitPolicy = messageRateLimitPolicy
     }
 }

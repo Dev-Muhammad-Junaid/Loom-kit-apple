@@ -21,6 +21,12 @@ public protocol LoomSessionProtocol: Sendable {
     /// Creates an observation stream for lifecycle state transitions.
     func makeStateObserver() async -> AsyncStream<LoomAuthenticatedSessionState>
 
+    /// Creates an observation stream for transport-path changes.
+    ///
+    /// Implementations that don't expose a real network path may return an
+    /// immediately-finishing stream.
+    func makePathObserver() async -> AsyncStream<LoomSessionNetworkPathSnapshot>
+
     /// Opens a logical bidirectional stream on the session.
     func openStream(label: String?) async throws -> LoomMultiplexedStream
 

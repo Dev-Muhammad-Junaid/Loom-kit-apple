@@ -55,6 +55,10 @@ package actor LoomVirtualAppSession: LoomSessionProtocol {
         stateObservers.makeStream(initialValue: state)
     }
 
+    package func makePathObserver() -> AsyncStream<LoomSessionNetworkPathSnapshot> {
+        AsyncStream { $0.finish() }
+    }
+
     package func openStream(label: String?) async throws -> LoomMultiplexedStream {
         guard case .ready = state else {
             throw LoomHostError.protocolViolation("The broker-backed Loom session is not ready.")
