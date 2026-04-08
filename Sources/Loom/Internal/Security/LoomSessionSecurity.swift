@@ -7,6 +7,7 @@
 
 import CryptoKit
 import Foundation
+import Security
 
 package enum LoomSessionTrafficClass: UInt8, Sendable {
     case control = 1
@@ -145,10 +146,11 @@ package struct LoomSessionSecurityContext: Sendable {
         }
     }
 
-    private static func randomNonce() -> Data {
+    private static func randomNonce() throws -> Data {
         var bytes = [UInt8](repeating: 0, count: nonceSize)
-        for i in bytes.indices {
-            bytes[i] = .random(in: .min ... .max)
+        let status = SecRandomCopyBytes(kSecRandomDefault, nonceSize, &bytes)
+        guard status == errSecSuccess else {
+            throw LoomSessionSecurityError.decryptFailed
         }
         return Data(bytes)
     }

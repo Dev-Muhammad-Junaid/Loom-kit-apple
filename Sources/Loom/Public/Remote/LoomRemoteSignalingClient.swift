@@ -604,12 +604,7 @@ public final class LoomRemoteSignalingClient {
     }
 
     private static func sha256Hex(_ data: Data) -> String {
-        let digest = SHA256.hash(data: data)
-        return digest.map { byte in
-            let hex = String(byte, radix: 16)
-            return hex.count == 1 ? "0\(hex)" : hex
-        }
-        .joined()
+        LoomHex.sha256Hex(data)
     }
 
     private static func appAuthPayload(

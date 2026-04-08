@@ -33,7 +33,7 @@ actor LoomGlobalSinkTestLock {
         nextWaiter.resume()
     }
 
-    func run<T>(
+    func run<T: Sendable>(
         reset: @escaping @Sendable () async -> Void = {},
         _ operation: @Sendable () async throws -> T
     ) async rethrows -> T {

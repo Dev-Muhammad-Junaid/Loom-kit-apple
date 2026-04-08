@@ -13,12 +13,7 @@ import Foundation
 public enum LoomBootstrapIdentityVerification {
     public static func keyID(for publicKey: Data) -> String {
         let canonicalPublicKey = canonicalizedPublicKeyData(publicKey)
-        let digest = SHA256.hash(data: canonicalPublicKey)
-        return digest.map { byte in
-            let hex = String(byte, radix: 16)
-            return hex.count == 1 ? "0\(hex)" : hex
-        }
-        .joined()
+        return LoomHex.sha256Hex(canonicalPublicKey)
     }
 
     public static func verify(signature: Data, payload: Data, publicKey: Data) -> Bool {

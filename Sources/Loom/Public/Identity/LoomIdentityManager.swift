@@ -141,12 +141,7 @@ public final class LoomIdentityManager {
     /// - Returns: Lowercase hexadecimal SHA-256 digest of canonical X9.63 bytes.
     public nonisolated static func keyID(for publicKey: Data) -> String {
         let canonicalPublicKey = canonicalizedPublicKeyData(publicKey)
-        let digest = SHA256.hash(data: canonicalPublicKey)
-        return digest.map { byte in
-            let hex = String(byte, radix: 16)
-            return hex.count == 1 ? "0\(hex)" : hex
-        }
-        .joined()
+        return LoomHex.sha256Hex(canonicalPublicKey)
     }
 
     private nonisolated static func canonicalizedPublicKeyData(_ publicKey: Data) -> Data {
@@ -215,11 +210,12 @@ public final class LoomIdentityManager {
         let status = SecItemAdd(attributes as CFDictionary, nil)
         if status == errSecSuccess { return }
         if status == errSecDuplicateItem {
-            let query: [String: Any] = [
+            var query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: service,
                 kSecAttrAccount as String: account,
             ]
+            query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
             let update: [String: Any] = [
                 kSecValueData as String: data,
                 kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,

@@ -121,6 +121,7 @@ public actor LoomTransferEngine {
     private let incomingTransfersContinuation: AsyncStream<LoomIncomingTransfer>.Continuation
     private var outboundControlStream: LoomMultiplexedStream?
     private var controlStreamTask: Task<Void, Never>?
+    private var incomingStreamObserverTask: Task<Void, Never>?
     private var outgoingTransfers: [UUID: OutgoingTransferState] = [:]
     private var incomingTransfersByID: [UUID: IncomingTransferState] = [:]
     private var pendingDataStreams: [UUID: LoomMultiplexedStream] = [:]
@@ -138,13 +139,21 @@ public actor LoomTransferEngine {
         incomingTransfers = stream
         incomingTransfersContinuation = continuation
         Task { [weak self] in
-            await self?.observeIncomingStreams()
+            await self?.startIncomingStreamObserver()
         }
     }
 
     deinit {
         controlStreamTask?.cancel()
+        incomingStreamObserverTask?.cancel()
         incomingTransfersContinuation.finish()
+    }
+
+    private func startIncomingStreamObserver() {
+        guard incomingStreamObserverTask == nil else { return }
+        incomingStreamObserverTask = Task { [weak self] in
+            await self?.observeIncomingStreams()
+        }
     }
 
     /// Offers one opaque object to the remote peer and returns a progress handle.
@@ -803,6 +812,6 @@ private struct LoomTransferControlMessage: Codable, Sendable {
 
 private extension SHA256Digest {
     var hexLowercased: String {
-        map { String(format: "%02x", $0) }.joined()
+        LoomHex.encode(self)
     }
 }

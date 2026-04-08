@@ -15,6 +15,8 @@ public actor LoomReplayProtector {
     private let allowedClockSkewMs: Int64
     private let maxEntries: Int
     private let maxNonceLength: Int
+    private var validatesSincePrune: Int = 0
+    private static let pruneInterval: Int = 64
 
     public init(
         allowedClockSkewMs: Int64 = 60_000,
@@ -36,13 +38,20 @@ public actor LoomReplayProtector {
         nonces[nonce] = timestampMs
         nonceOrder.append(nonce)
         enforceBoundedSize()
-        prune(nowMs: nowMs)
+
+        validatesSincePrune += 1
+        if validatesSincePrune >= Self.pruneInterval {
+            prune(nowMs: nowMs)
+            validatesSincePrune = 0
+        }
+
         return true
     }
 
     public func reset() {
         nonces.removeAll(keepingCapacity: true)
         nonceOrder.removeAll(keepingCapacity: true)
+        validatesSincePrune = 0
     }
 
     private func prune(nowMs: Int64) {

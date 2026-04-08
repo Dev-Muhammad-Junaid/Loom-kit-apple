@@ -5,7 +5,6 @@
 //  Created by Ethan Lipnik on 3/10/26.
 //
 
-import CryptoKit
 import Foundation
 import Loom
 
@@ -378,6 +377,6 @@ public actor LoomConnectionHandle {
 
 private extension Data {
     var sha256Hex: String {
-        SHA256.hash(data: self).map { String(format: "%02x", $0) }.joined()
+        LoomHex.sha256Hex(self)
     }
 }

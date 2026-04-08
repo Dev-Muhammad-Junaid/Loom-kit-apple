@@ -61,6 +61,9 @@ public final class LoomCloudKitManager {
     /// Cache of trusted participant identity key IDs with expiration.
     private var shareParticipantIdentityCache: [String: Date] = [:]
 
+    /// Observer token for iCloud account change notifications.
+    private var accountChangeObserver: (any NSObjectProtocol)?
+
     // MARK: - Initialization
 
     /// Creates a CloudKit manager with the specified configuration.
@@ -76,6 +79,14 @@ public final class LoomCloudKitManager {
     /// - Parameter containerIdentifier: CloudKit container identifier.
     public convenience init(containerIdentifier: String) {
         self.init(configuration: LoomCloudKitConfiguration(containerIdentifier: containerIdentifier))
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            if let accountChangeObserver {
+                NotificationCenter.default.removeObserver(accountChangeObserver)
+            }
+        }
     }
 
     // MARK: - Setup
@@ -168,6 +179,7 @@ public final class LoomCloudKitManager {
             LoomLogger.cloud("CloudKit: Registering current device...")
             await registerCurrentDevice()
 
+            registerAccountChangeObserver()
             isInitialized = true
             LoomLogger.cloud("CloudKit: Initialization complete")
         } catch {
@@ -449,10 +461,25 @@ public final class LoomCloudKitManager {
 
     /// Handles iCloud account changes by reinitializing.
     ///
-    /// Call this from your app's account change notification handler.
+    /// Call this from your app's account change notification handler, or
+    /// rely on the automatic observer registered during ``initialize()``.
     public func handleAccountChange() async {
         LoomLogger.cloud("iCloud account changed, reinitializing CloudKit")
         await reinitialize()
+    }
+
+    private func registerAccountChangeObserver() {
+        guard accountChangeObserver == nil else { return }
+        accountChangeObserver = NotificationCenter.default.addObserver(
+            forName: Notification.Name.CKAccountChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                await self.handleAccountChange()
+            }
+        }
     }
 }
 

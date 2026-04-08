@@ -149,12 +149,7 @@ public enum LoomBootstrapControlSecurity {
     }
 
     public static func payloadSHA256Hex(_ data: Data?) -> String {
-        let digest = SHA256.hash(data: data ?? Data("-".utf8))
-        return digest.map { byte in
-            let hex = String(byte, radix: 16)
-            return hex.count == 1 ? "0\(hex)" : hex
-        }
-        .joined()
+        LoomHex.sha256Hex(data ?? Data("-".utf8))
     }
 
     public static func encryptCredentials(

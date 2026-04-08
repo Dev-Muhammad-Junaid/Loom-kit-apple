@@ -14,7 +14,7 @@ import Observation
 public final class LoomNode {
     public var configuration: LoomNetworkConfiguration
     public var identityManager: LoomIdentityManager?
-    public weak var trustProvider: (any LoomTrustProvider)?
+    public var trustProvider: (any LoomTrustProvider)?
 
     public private(set) var discovery: LoomDiscovery?
 

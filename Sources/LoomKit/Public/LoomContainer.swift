@@ -151,11 +151,24 @@ public final class LoomContainer {
         LoomContext(store: store)
     }
 
-    static let environmentFallback: LoomContainer = try! LoomContainer(
-        for: LoomContainerConfiguration(
-            serviceName: "Loom"
-        )
-    )
+    /// Placeholder container used as the SwiftUI environment default.
+    ///
+    /// This is safe because the configuration uses hardcoded non-empty values
+    /// that always pass validation. A `preconditionFailure` guards against
+    /// future regressions instead of an opaque `try!` crash.
+    static let environmentFallback: LoomContainer = {
+        do {
+            return try LoomContainer(
+                for: LoomContainerConfiguration(
+                    serviceName: "Loom"
+                )
+            )
+        } catch {
+            preconditionFailure(
+                "LoomContainer environment fallback failed to initialize: \(error.localizedDescription)"
+            )
+        }
+    }()
 
     private static func cloudKitTrustMode(for trustMode: LoomTrustMode) -> LoomCloudKitTrustMode {
         switch trustMode {
