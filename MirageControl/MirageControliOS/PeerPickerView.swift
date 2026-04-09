@@ -78,14 +78,7 @@ struct PeerPickerView: View {
     private var header: some View {
         VStack(spacing: 16) {
             // Rose Three parametric loader (remote app branding)
-            ZStack {
-                Circle()
-                    .fill(MirageTheme.cardFill(colorScheme))
-                    .overlay(Circle().strokeBorder(MirageTheme.cardBorder(colorScheme), lineWidth: 1))
-                    .frame(width: 96, height: 96)
-
-                RoseThreeLoaderView(size: 72, color: Color.primary)
-            }
+            RoseThreeLoaderView(size: 108, color: MirageTheme.violet)
 
             VStack(spacing: 6) {
                 Text("MirageControl")
