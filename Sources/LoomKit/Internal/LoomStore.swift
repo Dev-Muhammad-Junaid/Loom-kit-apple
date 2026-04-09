@@ -787,12 +787,35 @@ actor LoomStore {
         retryStates.removeValue(forKey: connectionID)
     }
 
-    /// Returns `true` if a live (connected/reconnecting) connection already
-    /// exists for the given peer, enforcing at most one connection per device.
+    /// Returns `true` if a live (connected/stale/reconnecting) connection
+    /// already exists for the given peer.
     private func hasActiveConnection(for peerID: LoomPeerID) -> Bool {
         connectionSnapshots.values.contains { snapshot in
             snapshot.peerID == peerID
-                && (snapshot.state == .connected || snapshot.state == .reconnecting)
+                && (snapshot.state == .connected
+                    || snapshot.state == .stale
+                    || snapshot.state == .reconnecting)
+        }
+    }
+
+    /// Tears down any existing connection for a peer to make room for a
+    /// fresh session. Called when a new incoming connection from the same
+    /// device arrives — the old one is presumed dead.
+    private func replaceExistingConnection(for peerID: LoomPeerID) async {
+        let existing = connections.filter { $0.value.peerSnapshot.id == peerID }
+        guard !existing.isEmpty else { return }
+
+        for (connectionID, managed) in existing {
+            LoomLogger.log(
+                .transport,
+                "LoomKit replacing stale connection \(connectionID) for \(managed.peerSnapshot.name) with fresh session"
+            )
+            cancelRetry(connectionID: connectionID)
+            manuallyCancelledConnectionIDs.insert(connectionID)
+            await managed.handle.disconnect()
+            connections.removeValue(forKey: connectionID)
+            connectionSnapshots.removeValue(forKey: connectionID)
+            transferSnapshots = transferSnapshots.filter { $0.value.connectionID != connectionID }
         }
     }
 
@@ -968,14 +991,7 @@ actor LoomStore {
                 signalingSessionID: nil
             )
 
-            if hasActiveConnection(for: peerSnapshot.id) {
-                LoomLogger.log(
-                    .transport,
-                    "LoomKit rejecting duplicate incoming session from \(peerSnapshot.name) — active connection already exists"
-                )
-                await session.cancel()
-                return
-            }
+            await replaceExistingConnection(for: peerSnapshot.id)
 
             let handle = await registerConnection(
                 session: session,
@@ -996,14 +1012,7 @@ actor LoomStore {
     ) async {
         let peerSnapshot = snapshot(fromHostRecord: connection.descriptor.peer)
 
-        if hasActiveConnection(for: peerSnapshot.id) {
-            LoomLogger.log(
-                .transport,
-                "LoomKit rejecting duplicate host incoming connection from \(peerSnapshot.name) — active connection already exists"
-            )
-            await connection.session.cancel()
-            return
-        }
+        await replaceExistingConnection(for: peerSnapshot.id)
 
         let handle = await registerConnection(
             session: connection.session,

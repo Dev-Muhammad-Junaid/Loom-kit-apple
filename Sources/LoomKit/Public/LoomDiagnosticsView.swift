@@ -288,6 +288,7 @@ public struct LoomDiagnosticsView: View {
         let (label, color): (String, Color) = switch state {
         case .connecting: ("Connecting", .orange)
         case .connected: ("Connected", .green)
+        case .stale: ("Stale", .yellow)
         case .disconnecting: ("Disconnecting", .yellow)
         case .disconnected: ("Disconnected", .gray)
         case .failed: ("Failed", .red)

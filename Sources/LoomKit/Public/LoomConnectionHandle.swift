@@ -44,12 +44,15 @@ public actor LoomConnectionHandle {
     private var streamObservationTask: Task<Void, Never>?
     private var transferObservationTask: Task<Void, Never>?
     private var pathObservationTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
     private var transferProgressTasks: [UUID: Task<Void, Never>] = [:]
     private var transferFileURLs: [UUID: URL] = [:]
     /// Most recently observed health snapshot. `nil` before the first path update.
     public private(set) var latestHealth: LoomConnectionHealthSnapshot?
     private let rateLimiter: LoomTokenBucketRateLimiter?
     private var didReportDisconnection = false
+    private var isStale = false
+    private var lastActivityAt: ContinuousClock.Instant = .now
 
     init(
         id: UUID,
@@ -101,6 +104,7 @@ public actor LoomConnectionHandle {
         streamObservationTask?.cancel()
         transferObservationTask?.cancel()
         pathObservationTask?.cancel()
+        heartbeatTask?.cancel()
         for task in transferProgressTasks.values {
             task.cancel()
         }
@@ -129,6 +133,9 @@ public actor LoomConnectionHandle {
         }
         transferObservationTask = Task {
             await observeIncomingTransfers()
+        }
+        heartbeatTask = Task {
+            await runHeartbeatLoop()
         }
     }
 
@@ -254,9 +261,11 @@ public actor LoomConnectionHandle {
         let streamObserver = session.makeIncomingStreamObserver()
         for await stream in streamObserver {
             guard stream.label == Self.defaultMessageStreamLabel else {
+                lastActivityAt = .now
                 continue
             }
             for await payload in stream.incomingBytes {
+                lastActivityAt = .now
                 if let rateLimiter, !rateLimiter.tryConsume() {
                     LoomLogger.debug(
                         .transport,
@@ -278,6 +287,12 @@ public actor LoomConnectionHandle {
             let health = LoomConnectionHealthSnapshot(from: snapshot)
             latestHealth = health
             healthContinuation.yield(health)
+
+            if snapshot.status == .unsatisfied && !isStale {
+                markStale()
+            } else if snapshot.status == .satisfied && isStale {
+                markRecovered()
+            }
         }
         networkPathContinuation.finish()
         healthContinuation.finish()
@@ -364,6 +379,49 @@ public actor LoomConnectionHandle {
             contentType: offer.contentType,
             fileURL: transferFileURLs[offer.id]
         )
+    }
+
+    private static let heartbeatInterval: Duration = .seconds(5)
+
+    private func runHeartbeatLoop() async {
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(for: Self.heartbeatInterval)
+            } catch { return }
+
+            let pathDead = latestHealth?.pathStatus == .unsatisfied
+
+            if pathDead && !isStale {
+                markStale()
+            }
+        }
+    }
+
+    private func markStale() {
+        guard !isStale, !didReportDisconnection else { return }
+        isStale = true
+        LoomLogger.log(
+            .transport,
+            "LoomKit connection \(id) to \(peer.name) marked stale"
+        )
+        eventsContinuation.yield(.stateChanged(.stale))
+        Task {
+            await onStateChanged(id, .stale, nil)
+        }
+    }
+
+    private func markRecovered() {
+        guard isStale else { return }
+        isStale = false
+        lastActivityAt = .now
+        LoomLogger.log(
+            .transport,
+            "LoomKit connection \(id) to \(peer.name) recovered from stale"
+        )
+        eventsContinuation.yield(.stateChanged(.connected))
+        Task {
+            await onStateChanged(id, .connected, nil)
+        }
     }
 
     private func reportDisconnectionIfNeeded(_ errorMessage: String?) async {

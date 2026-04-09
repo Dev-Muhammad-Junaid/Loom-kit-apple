@@ -148,6 +148,9 @@ public struct LoomConnectionSnapshot: Identifiable, Hashable, Sendable {
         case connecting
         /// The authenticated session is open and usable.
         case connected
+        /// The transport path is unsatisfied or the peer has not responded
+        /// to heartbeat pings — the connection may be dead.
+        case stale
         /// The connection is tearing down locally.
         case disconnecting
         /// The connection closed cleanly or was cancelled.
