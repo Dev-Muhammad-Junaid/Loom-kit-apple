@@ -615,6 +615,24 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
                 return nil
             }
 
+            // Cancel the trust evaluation if the remote peer disconnects
+            // while the approval dialog is open.
+            group.addTask { [weak self] in
+                guard let self else { return nil }
+                for await sessionState in await self.makeStateObserver() {
+                    switch sessionState {
+                    case .failed, .cancelled:
+                        return LoomTrustEvaluation(
+                            decision: .denied,
+                            shouldShowAutoTrustNotice: false
+                        )
+                    default:
+                        continue
+                    }
+                }
+                return nil
+            }
+
             var result: LoomTrustEvaluation?
             for await value in group {
                 if let value {

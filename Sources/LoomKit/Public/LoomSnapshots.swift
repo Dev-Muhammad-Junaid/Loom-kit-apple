@@ -301,6 +301,35 @@ public struct LoomTransferSnapshot: Identifiable, Hashable, Sendable {
     }
 }
 
+/// Emitted when a connection is removed from the runtime — typically
+/// because the remote peer disconnected before the app took action.
+///
+/// Observe ``LoomContext/dismissedConnections`` to clear pending
+/// approval dialogs and delivered notifications for the connection.
+public struct LoomConnectionDismissal: Sendable, Identifiable {
+    /// The connection ID that was dismissed.
+    public let id: UUID
+    /// Peer identifier for the dismissed connection.
+    public let peerID: LoomPeerID
+    /// Display name of the peer at dismissal time.
+    public let peerName: String
+    /// `true` when the remote peer sent a goodbye frame, meaning the
+    /// disconnect was intentional (e.g. user tapped "Cancel Request").
+    public let wasGraceful: Bool
+
+    public init(
+        id: UUID,
+        peerID: LoomPeerID,
+        peerName: String,
+        wasGraceful: Bool
+    ) {
+        self.id = id
+        self.peerID = peerID
+        self.peerName = peerName
+        self.wasGraceful = wasGraceful
+    }
+}
+
 /// Per-connection event emitted by ``LoomConnectionHandle``.
 public enum LoomConnectionEvent: Sendable {
     /// Reports a high-level state transition for the connection.

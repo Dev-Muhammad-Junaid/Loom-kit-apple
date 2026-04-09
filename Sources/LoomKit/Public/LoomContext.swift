@@ -34,10 +34,18 @@ public final class LoomContext {
     /// Stream of newly accepted incoming connections.
     public nonisolated let incomingConnections: AsyncStream<LoomConnectionHandle>
 
+    /// Stream of connection dismissals — emitted when a connection is
+    /// removed because the remote peer disconnected or cancelled its
+    /// request. Observe this to dismiss pending approval dialogs and
+    /// clear delivered notifications for the connection.
+    public nonisolated let dismissedConnections: AsyncStream<LoomConnectionDismissal>
+
     private let store: LoomStore
     private let incomingConnectionsContinuation: AsyncStream<LoomConnectionHandle>.Continuation
+    private let dismissedConnectionsContinuation: AsyncStream<LoomConnectionDismissal>.Continuation
     private var snapshotTask: Task<Void, Never>?
     private var incomingConnectionsTask: Task<Void, Never>?
+    private var dismissedConnectionsTask: Task<Void, Never>?
 
     init(store: LoomStore) {
         self.store = store
@@ -45,6 +53,10 @@ public final class LoomContext {
         let (incomingConnections, incomingConnectionsContinuation) = AsyncStream.makeStream(of: LoomConnectionHandle.self)
         self.incomingConnections = incomingConnections
         self.incomingConnectionsContinuation = incomingConnectionsContinuation
+
+        let (dismissedConnections, dismissedConnectionsContinuation) = AsyncStream.makeStream(of: LoomConnectionDismissal.self)
+        self.dismissedConnections = dismissedConnections
+        self.dismissedConnectionsContinuation = dismissedConnectionsContinuation
 
         snapshotTask = Task { [weak self] in
             let snapshots = await store.makeSnapshotStream()
@@ -67,13 +79,25 @@ public final class LoomContext {
             }
             self?.incomingConnectionsContinuation.finish()
         }
+        dismissedConnectionsTask = Task { [weak self] in
+            let dismissed = await store.makeDismissedConnectionsStream()
+            for await dismissal in dismissed {
+                guard let self else {
+                    return
+                }
+                self.dismissedConnectionsContinuation.yield(dismissal)
+            }
+            self?.dismissedConnectionsContinuation.finish()
+        }
     }
 
     deinit {
         MainActor.assumeIsolated {
             snapshotTask?.cancel()
             incomingConnectionsTask?.cancel()
+            dismissedConnectionsTask?.cancel()
             incomingConnectionsContinuation.finish()
+            dismissedConnectionsContinuation.finish()
         }
     }
 

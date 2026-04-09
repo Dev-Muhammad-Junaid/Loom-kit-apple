@@ -94,6 +94,7 @@ actor LoomStore {
     private let sshBootstrapClient: any LoomSSHBootstrapClient
     private let snapshotBroadcaster = LoomAsyncBroadcaster<LoomStoreSnapshot>()
     private let incomingConnectionBroadcaster = LoomAsyncBroadcaster<LoomConnectionHandle>()
+    private let dismissedConnectionBroadcaster = LoomAsyncBroadcaster<LoomConnectionDismissal>()
 
     private var isRunning = false
     private var isRemoteHosting = false
@@ -157,6 +158,10 @@ actor LoomStore {
 
     func makeIncomingConnectionsStream() -> AsyncStream<LoomConnectionHandle> {
         incomingConnectionBroadcaster.makeStream()
+    }
+
+    func makeDismissedConnectionsStream() -> AsyncStream<LoomConnectionDismissal> {
+        dismissedConnectionBroadcaster.makeStream()
     }
 
     func start() async throws {
@@ -681,6 +686,15 @@ actor LoomStore {
                 lastError: errorMessage
             )
             connectionSnapshots.removeValue(forKey: id)
+
+            dismissedConnectionBroadcaster.yield(
+                LoomConnectionDismissal(
+                    id: existingSnapshot.id,
+                    peerID: existingSnapshot.peerID,
+                    peerName: existingSnapshot.peerName,
+                    wasGraceful: errorMessage == nil
+                )
+            )
         }
         transferSnapshots = transferSnapshots.filter { $0.value.connectionID != id }
         await notifyStateChanged()
@@ -814,7 +828,16 @@ actor LoomStore {
             manuallyCancelledConnectionIDs.insert(connectionID)
             await managed.handle.disconnect()
             connections.removeValue(forKey: connectionID)
-            connectionSnapshots.removeValue(forKey: connectionID)
+            if let snapshot = connectionSnapshots.removeValue(forKey: connectionID) {
+                dismissedConnectionBroadcaster.yield(
+                    LoomConnectionDismissal(
+                        id: snapshot.id,
+                        peerID: snapshot.peerID,
+                        peerName: snapshot.peerName,
+                        wasGraceful: true
+                    )
+                )
+            }
             transferSnapshots = transferSnapshots.filter { $0.value.connectionID != connectionID }
         }
     }
