@@ -63,12 +63,12 @@ struct ControlView: View {
                     .animation(.easeInOut(duration: 0.18), value: selectedTab)
                 }
             } else {
-                VStack(spacing: 14) {
-                    ProgressView().scaleEffect(1.3)
-                    Text("Initializing…")
-                        .font(.system(size: 14))
-                        .foregroundStyle(Color.secondary)
-                }
+                MirageLoadingStateView(
+                    title: "Initializing…",
+                    verticalPadding: 48,
+                    progressScale: 1.28
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         // Screenshot sheet
@@ -83,18 +83,19 @@ struct ControlView: View {
                     ZStack {
                         Color.black.ignoresSafeArea()
                         VStack(spacing: 18) {
-                            ProgressView()
-                                .tint(.white)
-                                .scaleEffect(1.4)
-                            Text("Capturing screen…")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.6))
+                            MirageLoadingStateView(
+                                title: "Capturing screen…",
+                                verticalPadding: 0,
+                                progressScale: 1.35,
+                                progressTint: .white,
+                                titleColor: .white.opacity(0.88)
+                            )
                             Button("Cancel") {
                                 screenshotTimeoutTask?.cancel()
                                 isScreenshotPresented = false
                             }
-                            .font(.system(size: 14))
-                            .foregroundStyle(.white.opacity(0.4))
+                            .font(MirageTheme.TypeStyle.captionRounded)
+                            .foregroundStyle(.white.opacity(0.45))
                         }
                     }
                 }

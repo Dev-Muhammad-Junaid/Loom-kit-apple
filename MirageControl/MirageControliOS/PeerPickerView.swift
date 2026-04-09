@@ -96,15 +96,7 @@ struct PeerPickerView: View {
     // MARK: - Empty state
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
-            ProgressView()
-                .scaleEffect(1.3)
-            Text("Searching for Macs…")
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(Color.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 60)
+        MirageLoadingStateView(title: "Searching for Macs…")
     }
 
     // MARK: - Actions

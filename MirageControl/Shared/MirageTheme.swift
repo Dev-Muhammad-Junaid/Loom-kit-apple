@@ -260,5 +260,7 @@ enum MirageTheme {
         static let bodyRounded = Font.system(size: 15, weight: .regular, design: .rounded)
         static let captionRounded = Font.system(size: 13, weight: .regular, design: .rounded)
         static let buttonRounded = Font.system(size: 15, weight: .semibold, design: .rounded)
+        /// Progress / empty-state titles (peer search, initializing, apps loading).
+        static let loadingTitle = Font.system(size: 15, weight: .medium, design: .rounded)
     }
 }

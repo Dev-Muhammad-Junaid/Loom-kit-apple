@@ -127,15 +127,7 @@ struct StreamDeckGridView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 40)
                 } else if installedApps.isEmpty {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                            .scaleEffect(1.2)
-                        Text("Loading apps from Mac…")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(Color.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 60)
+                    MirageLoadingStateView(title: "Loading apps from Mac…")
                 }
             }
         }
