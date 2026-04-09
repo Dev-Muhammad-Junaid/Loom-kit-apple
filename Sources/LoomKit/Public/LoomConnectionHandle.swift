@@ -45,6 +45,7 @@ public actor LoomConnectionHandle {
     private var transferObservationTask: Task<Void, Never>?
     private var pathObservationTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
+    private var goodbyeObserverTask: Task<Void, Never>?
     private var transferProgressTasks: [UUID: Task<Void, Never>] = [:]
     private var transferFileURLs: [UUID: URL] = [:]
     /// Most recently observed health snapshot. `nil` before the first path update.
@@ -52,6 +53,9 @@ public actor LoomConnectionHandle {
     private let rateLimiter: LoomTokenBucketRateLimiter?
     private var didReportDisconnection = false
     private var isStale = false
+    /// Set to `true` when the remote peer sends a goodbye frame before
+    /// closing. Prevents the local side from retrying the connection.
+    private var wasGracefulClose = false
     private var lastActivityAt: ContinuousClock.Instant = .now
 
     init(
@@ -105,6 +109,7 @@ public actor LoomConnectionHandle {
         transferObservationTask?.cancel()
         pathObservationTask?.cancel()
         heartbeatTask?.cancel()
+        goodbyeObserverTask?.cancel()
         for task in transferProgressTasks.values {
             task.cancel()
         }
@@ -136,6 +141,9 @@ public actor LoomConnectionHandle {
         }
         heartbeatTask = Task {
             await runHeartbeatLoop()
+        }
+        goodbyeObserverTask = Task {
+            await observeGoodbye()
         }
     }
 
@@ -220,10 +228,22 @@ public actor LoomConnectionHandle {
         try await transfer.accept(using: sink, resumeOffset: resumeOffset)
     }
 
-    /// Cancels the authenticated session and tears down the connection handle.
+    /// Sends a goodbye frame to the remote peer and then cancels the session.
+    ///
+    /// The goodbye frame tells the remote side that this disconnection was
+    /// intentional, suppressing its auto-retry logic.
     public func disconnect() async {
         eventsContinuation.yield(.stateChanged(.disconnecting))
         await onStateChanged(id, .disconnecting, nil)
+
+        do {
+            let stream = try await session.openStream(label: Self.goodbyeStreamLabel)
+            try await stream.send(Data([0x01]))
+            try await stream.close()
+        } catch {
+            // Best effort — proceed with cancel even if goodbye delivery fails
+        }
+
         await session.cancel()
     }
 
@@ -381,6 +401,23 @@ public actor LoomConnectionHandle {
         )
     }
 
+    /// Watches for a goodbye stream from the remote peer on a dedicated
+    /// broadcast subscriber so it is not blocked by the default-message
+    /// inner read loop.
+    private func observeGoodbye() async {
+        let observer = session.makeIncomingStreamObserver()
+        for await stream in observer {
+            if stream.label == Self.goodbyeStreamLabel {
+                wasGracefulClose = true
+                LoomLogger.debug(
+                    .transport,
+                    "LoomKit received goodbye from \(peer.name) on connection \(id)"
+                )
+                return
+            }
+        }
+    }
+
     private static let heartbeatInterval: Duration = .seconds(5)
 
     private func runHeartbeatLoop() async {
@@ -428,9 +465,18 @@ public actor LoomConnectionHandle {
         guard !didReportDisconnection else {
             return
         }
+
+        // Give the goodbye frame a moment to arrive before deciding.
+        // The goodbye stream is tiny and typically arrives before the
+        // TCP RST, but allow a short window for scheduling jitter.
+        if errorMessage != nil && !wasGracefulClose {
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+
         didReportDisconnection = true
-        eventsContinuation.yield(.disconnected(errorMessage))
-        await onDisconnected(id, errorMessage)
+        let effectiveError = wasGracefulClose ? nil : errorMessage
+        eventsContinuation.yield(.disconnected(effectiveError))
+        await onDisconnected(id, effectiveError)
     }
 
     private func finishPublicStreams() {
@@ -481,6 +527,7 @@ public actor LoomConnectionHandle {
     }
 
     private static let defaultMessageStreamLabel = "loomkit.messages.v1"
+    private static let goodbyeStreamLabel = "loomkit.goodbye.v1"
 }
 
 private extension Data {
