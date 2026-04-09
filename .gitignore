@@ -1,3 +1,6 @@
+# Cursor agent debug logs (local only)
+.cursor/debug-*.log
+
 .DS_Store
 .build*/
 .swiftpm/
