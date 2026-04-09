@@ -75,7 +75,9 @@ final class ControlReceiver {
         case .requestAppList:
             await handleAppListRequest(handle: handle)
 
-        case .authorizationStatus, .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse:
+        case .authorizationStatus:
+            break
+        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse:
             // Client-bound messages; host doesn't process them locally
             break
         }

@@ -31,7 +31,7 @@ struct ContentRootView: View {
                     )
                     .blur(radius: authStatus == "granted" ? 0 : 15)
                     .disabled(authStatus != "granted")
-                    
+
                     if authStatus != "granted" {
                         AuthorizationOverlay(
                             status: authStatus,
@@ -50,7 +50,7 @@ struct ContentRootView: View {
                 ))
                 .task(id: connection.peerName) {
                     authStatus = "pending"
-                    
+
                     // Only listen for connection-level events (disconnect) here.
                     // All message-level handling is consolidated in ControlView
                     // to avoid competing async consumers on the same stream.

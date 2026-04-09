@@ -71,6 +71,17 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
             onDeviceAuthorized?(handle)
             return
         }
+
+        if let existing = pendingConnections.first(where: { $0.peerID == connection.peerID && $0.id != connection.id }) {
+            removePendingConnection(id: existing.id)
+            if let oldHandle = pendingHandles.removeValue(forKey: existing.id) {
+                Task {
+                    try? await oldHandle.send(ControlMessage.authorizationStatus(status: "denied"))
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    await oldHandle.disconnect()
+                }
+            }
+        }
         
         // Not authorized, add to pending list
         if !pendingConnections.contains(where: { $0.id == connection.id }) {
@@ -87,8 +98,25 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
     
     func authorize(connection: LoomConnectionSnapshot) {
         authorizedDeviceIDs.insert(connection.peerID)
-        removePendingConnection(id: connection.id)
-        if let handle = pendingHandles.removeValue(forKey: connection.id) {
+        let peerPending = pendingConnections
+            .filter { $0.peerID == connection.peerID }
+            .sorted { $0.connectedAt > $1.connectedAt }
+        let target = peerPending.first ?? connection
+        let staleForPeer = peerPending.filter { $0.id != target.id }
+
+        for stale in staleForPeer {
+            removePendingConnection(id: stale.id)
+            if let staleHandle = pendingHandles.removeValue(forKey: stale.id) {
+                Task {
+                    try? await staleHandle.send(ControlMessage.authorizationStatus(status: "denied"))
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    await staleHandle.disconnect()
+                }
+            }
+        }
+
+        removePendingConnection(id: target.id)
+        if let handle = pendingHandles.removeValue(forKey: target.id) {
             Task {
                 try? await handle.send(ControlMessage.authorizationStatus(status: "granted"))
                 onDeviceAuthorized?(handle)
@@ -141,8 +169,12 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
         content.sound = .default
         content.categoryIdentifier = "INCOMING_CONNECTION"
         
-        // Stash the connection ID into the notification so we know who to approve
-        content.userInfo = ["connectionID": connection.id.uuidString]
+        // Stash both connection and peer IDs so notification actions can
+        // still resolve to the latest pending request for this peer.
+        content.userInfo = [
+            "connectionID": connection.id.uuidString,
+            "peerID": connection.peerID.uuidString,
+        ]
         
         let request = UNNotificationRequest(identifier: "conn-\(connection.id.uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
@@ -186,11 +218,23 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
     ) {
         let actionIdentifier = response.actionIdentifier
         let idString = response.notification.request.content.userInfo["connectionID"] as? String
+        let peerIDString = response.notification.request.content.userInfo["peerID"] as? String
         
         Task { @MainActor in
             if let idString = idString, let connectionID = UUID(uuidString: idString) {
-                // Find the pending connection
-                if let pending = self.pendingConnections.first(where: { $0.id == connectionID }) {
+                // Find the pending connection; if the notification is stale
+                // for an older connection ID, fall back to the latest pending
+                // request from the same peer.
+                let pending =
+                    self.pendingConnections.first(where: { $0.id == connectionID })
+                    ?? {
+                        guard let peerIDString, let peerUUID = UUID(uuidString: peerIDString) else {
+                            return nil
+                        }
+                        let peerID = LoomPeerID(deviceID: peerUUID)
+                        return self.pendingConnections.last(where: { $0.peerID == peerID })
+                    }()
+                if let pending {
                     if actionIdentifier == "ACCEPT_ACTION" {
                         self.authorize(connection: pending)
                     } else if actionIdentifier == "REJECT_ACTION" {
