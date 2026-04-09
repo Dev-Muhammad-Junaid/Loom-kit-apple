@@ -76,10 +76,10 @@ struct MacMenuBarView: View {
                     Image(systemName: "ipad.and.iphone")
                         .font(.system(size: 32))
                         .foregroundStyle(Color(hex: "6C63FF").opacity(0.7))
-                    Text("Waiting for iPad…")
+                    Text("Waiting for Connection Request...")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
-                    Text("Open MirageControl on your iPad\nand select this Mac.")
+                    Text("Open MirageControl on your iPhone,iPad\nand select this Mac.")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
@@ -152,9 +152,11 @@ private struct ConnectionRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.peerName)
                     .font(.system(size: 12, weight: .semibold))
-                Text("Connected & Authorized")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                TimelineView(.periodic(from: .now, by: 60)) { _ in
+                    Text("Connected \(connection.connectedAt, style: .relative) ago")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer()
             
@@ -199,6 +201,11 @@ private struct PendingConnectionRow: View {
                 Text("Requesting mouse access")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
+                if let requestedAt = authManager.pendingRequestedDate(for: connection.id) {
+                    Text("Pending \(requestedAt, style: .relative) ago")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
             }
             Spacer()
             

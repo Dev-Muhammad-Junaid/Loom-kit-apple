@@ -28,9 +28,12 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
     
     // Retain handles so we can route them after approval
     private var pendingHandles: [UUID: LoomConnectionHandle] = [:]
+    private var pendingRequestedAt: [UUID: Date] = [:]
+    private var pendingExpiryTasks: [UUID: Task<Void, Never>] = [:]
 
     // Callback so MacMenuBarView can pass authorized handles to the receiver
     var onDeviceAuthorized: ((LoomConnectionHandle) -> Void)?
+    private static let pendingRequestTimeout: Duration = .seconds(45)
 
     override init() {
         super.init()
@@ -73,16 +76,18 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
         if !pendingConnections.contains(where: { $0.id == connection.id }) {
             pendingConnections.append(connection)
             pendingHandles[connection.id] = handle
+            pendingRequestedAt[connection.id] = Date()
             Task {
                 try? await handle.send(ControlMessage.authorizationStatus(status: "pending"))
             }
             showNotification(for: connection)
+            schedulePendingExpiry(for: connection.id)
         }
     }
     
     func authorize(connection: LoomConnectionSnapshot) {
         authorizedDeviceIDs.insert(connection.peerID)
-        pendingConnections.removeAll(where: { $0.id == connection.id })
+        removePendingConnection(id: connection.id)
         if let handle = pendingHandles.removeValue(forKey: connection.id) {
             Task {
                 try? await handle.send(ControlMessage.authorizationStatus(status: "granted"))
@@ -92,7 +97,7 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
     }
     
     func reject(connection: LoomConnectionSnapshot, loomContext: LoomContext) {
-        pendingConnections.removeAll(where: { $0.id == connection.id })
+        removePendingConnection(id: connection.id)
         if let handle = pendingHandles.removeValue(forKey: connection.id) {
             Task {
                 try? await handle.send(ControlMessage.authorizationStatus(status: "denied"))
@@ -104,8 +109,28 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
     
     func removeAndDisconnect(connection: LoomConnectionSnapshot, loomContext: LoomContext) {
         authorizedDeviceIDs.remove(connection.peerID)
+        removePendingConnection(id: connection.id)
         Task {
             await loomContext.disconnect(connection)
+        }
+    }
+
+    func handleDismissal(_ dismissal: LoomConnectionDismissal) {
+        removePendingConnection(id: dismissal.id)
+        pendingHandles.removeValue(forKey: dismissal.id)
+    }
+
+    func pendingRequestedDate(for connectionID: UUID) -> Date? {
+        pendingRequestedAt[connectionID]
+    }
+
+    func fallbackPrunePendingWithoutActiveConnection(activeConnectionIDs: Set<UUID>) {
+        let orphaned = pendingConnections
+            .map(\.id)
+            .filter { !activeConnectionIDs.contains($0) }
+        for id in orphaned {
+            removePendingConnection(id: id)
+            pendingHandles.removeValue(forKey: id)
         }
     }
 
@@ -121,6 +146,35 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
         
         let request = UNNotificationRequest(identifier: "conn-\(connection.id.uuidString)", content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
+    }
+
+    private func schedulePendingExpiry(for connectionID: UUID) {
+        pendingExpiryTasks[connectionID]?.cancel()
+        pendingExpiryTasks[connectionID] = Task { [weak self] in
+            try? await Task.sleep(for: Self.pendingRequestTimeout)
+            await MainActor.run {
+                guard let self else { return }
+                guard self.pendingConnections.contains(where: { $0.id == connectionID }) else { return }
+                self.removePendingConnection(id: connectionID)
+                if let handle = self.pendingHandles.removeValue(forKey: connectionID) {
+                    Task {
+                        try? await handle.send(ControlMessage.authorizationStatus(status: "denied"))
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                        await handle.disconnect()
+                    }
+                }
+            }
+        }
+    }
+
+    private func removePendingConnection(id: UUID) {
+        pendingConnections.removeAll(where: { $0.id == id })
+        pendingRequestedAt.removeValue(forKey: id)
+        pendingExpiryTasks[id]?.cancel()
+        pendingExpiryTasks.removeValue(forKey: id)
+        let notificationID = "conn-\(id.uuidString)"
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [notificationID])
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notificationID])
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -140,7 +194,7 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
                     if actionIdentifier == "ACCEPT_ACTION" {
                         self.authorize(connection: pending)
                     } else if actionIdentifier == "REJECT_ACTION" {
-                        self.pendingConnections.removeAll(where: { $0.id == connectionID })
+                        self.removePendingConnection(id: connectionID)
                         if let handle = self.pendingHandles.removeValue(forKey: connectionID) {
                             Task {
                                 try? await handle.send(ControlMessage.authorizationStatus(status: "denied"))

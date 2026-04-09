@@ -58,6 +58,27 @@ final class MacDaemon: ObservableObject {
                 }
             }
         }
+
+        Task {
+            for await dismissal in context.dismissedConnections {
+                await MainActor.run {
+                    DeviceAuthorizationManager.shared.handleDismissal(dismissal)
+                }
+            }
+        }
+
+        Task {
+            while true {
+                try? await Task.sleep(for: .seconds(5))
+                let activeIDs = await MainActor.run {
+                    Set(context.connections.map(\.id))
+                }
+                await MainActor.run {
+                    DeviceAuthorizationManager.shared
+                        .fallbackPrunePendingWithoutActiveConnection(activeConnectionIDs: activeIDs)
+                }
+            }
+        }
     }
 }
 

@@ -615,6 +615,17 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
                 return nil
             }
 
+            // Expire pending approvals after a bounded window so host apps do
+            // not accumulate stale request dialogs/notifications indefinitely.
+            group.addTask {
+                try? await Task.sleep(for: Self.pendingTrustApprovalTimeout)
+                guard !Task.isCancelled else { return nil }
+                return LoomTrustEvaluation(
+                    decision: .denied,
+                    shouldShowAutoTrustNotice: false
+                )
+            }
+
             // Cancel the trust evaluation if the remote peer disconnects
             // while the approval dialog is open.
             group.addTask { [weak self] in
@@ -652,6 +663,10 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
         try await sendTrustStatus(finalStatus)
         return evaluation
     }
+
+    /// Maximum time a host-side trust request is allowed to remain pending
+    /// before Loom auto-denies it as expired.
+    private static let pendingTrustApprovalTimeout: Duration = .seconds(45)
 
     /// Initiator (client) side: receive trust status frames from the host.
     private func receiveHostTrustStatus() async throws -> LoomTrustEvaluation {
