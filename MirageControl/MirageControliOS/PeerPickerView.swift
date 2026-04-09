@@ -17,21 +17,9 @@ struct PeerPickerView: View {
     @State private var connecting: UUID?
     @State private var errorMessage: String?
 
-    // MARK: - Adaptive colours
-
-    private var bg: Color {
-        colorScheme == .dark ? Color(hex: "0A0A0F") : Color(UIColor.systemGroupedBackground)
-    }
-    private var cardFill: Color {
-        colorScheme == .dark ? .white.opacity(0.07) : Color(UIColor.systemBackground)
-    }
-    private var cardBorder: Color {
-        colorScheme == .dark ? .white.opacity(0.1) : Color.primary.opacity(0.08)
-    }
-
     var body: some View {
         ZStack {
-            bg.ignoresSafeArea()
+            MirageTheme.canvasBackground(colorScheme).ignoresSafeArea()
 
             VStack(spacing: 0) {
                 // ── Header ────────────────────────────────────────────
@@ -60,11 +48,14 @@ struct PeerPickerView: View {
                 // ── Error banner ──────────────────────────────────────
                 if let error = errorMessage {
                     Text(error)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.white)
+                        .font(MirageTheme.TypeStyle.captionRounded)
+                        .foregroundStyle(MirageTheme.errorBannerLabel(colorScheme))
                         .padding(.horizontal, 20)
                         .padding(.vertical, 10)
-                        .background(Color.red.opacity(0.75).clipShape(RoundedRectangle(cornerRadius: 12)))
+                        .background(
+                            MirageTheme.errorBannerFill(colorScheme)
+                                .clipShape(RoundedRectangle(cornerRadius: MirageTheme.Radius.sm, style: .continuous))
+                        )
                         .padding(.horizontal, 24)
                         .padding(.top, 8)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -86,17 +77,14 @@ struct PeerPickerView: View {
 
     private var header: some View {
         VStack(spacing: 16) {
-            // Icon: original cursorarrow.rays, no glowing blob
+            // Rose Three parametric loader (remote app branding)
             ZStack {
                 Circle()
-                    .fill(cardFill)
-                    .overlay(Circle().strokeBorder(cardBorder, lineWidth: 1))
+                    .fill(MirageTheme.cardFill(colorScheme))
+                    .overlay(Circle().strokeBorder(MirageTheme.cardBorder(colorScheme), lineWidth: 1))
                     .frame(width: 96, height: 96)
 
-                Image(systemName: "cursorarrow.rays")
-                    .font(.system(size: 38, weight: .thin))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.primary)
+                RoseThreeLoaderView(size: 72, color: Color.primary)
             }
 
             VStack(spacing: 6) {
@@ -166,22 +154,13 @@ private struct PeerRow: View {
 
     @State private var isPressed = false
 
-    private var cardFill: Color {
-        colorScheme == .dark
-            ? .white.opacity(isPressed ? 0.12 : 0.07)
-            : Color(UIColor.systemBackground).opacity(isPressed ? 0.9 : 1.0)
-    }
-    private var cardBorder: Color {
-        colorScheme == .dark ? .white.opacity(0.1) : Color.primary.opacity(0.07)
-    }
-
     var body: some View {
         Button(action: onTap) {
             HStack(spacing: 16) {
                 // Mac icon
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.primary.opacity(0.07))
+                    RoundedRectangle(cornerRadius: MirageTheme.Radius.sm)
+                        .fill(MirageTheme.subtleWellFill(colorScheme))
                         .frame(width: 46, height: 46)
                     Image(systemName: "desktopcomputer")
                         .font(.system(size: 20, weight: .thin))
@@ -195,7 +174,7 @@ private struct PeerRow: View {
                         .foregroundStyle(Color.primary)
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(peer.isNearby ? Color.green : Color.orange)
+                            .fill(peer.isNearby ? MirageTheme.success : Color.orange)
                             .frame(width: 6, height: 6)
                         Text(peer.isNearby ? "Nearby" : "Remote")
                             .font(.system(size: 12))
@@ -217,11 +196,11 @@ private struct PeerRow: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
             .background(
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(cardFill)
+                RoundedRectangle(cornerRadius: MirageTheme.Radius.lg)
+                    .fill(MirageTheme.cardFill(colorScheme, pressed: isPressed))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 18)
-                            .strokeBorder(cardBorder, lineWidth: 1)
+                        RoundedRectangle(cornerRadius: MirageTheme.Radius.lg)
+                            .strokeBorder(MirageTheme.cardBorder(colorScheme), lineWidth: 1)
                     )
                     .shadow(
                         color: colorScheme == .dark ? .clear : .black.opacity(0.04),

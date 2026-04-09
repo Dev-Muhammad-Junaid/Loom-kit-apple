@@ -17,12 +17,8 @@ struct TrackpadView: View {
     @State private var ripplePos: CGPoint?
     @State private var rippleVisible = false
 
-    private var bg: Color {
-        colorScheme == .dark ? Color(hex: "0A0A0F") : Color(UIColor.systemGroupedBackground)
-    }
-    private var surfaceFill: Color {
-        colorScheme == .dark ? .white.opacity(0.06) : Color(UIColor.systemBackground)
-    }
+    private var bg: Color { MirageTheme.canvasBackground(colorScheme) }
+    private var surfaceFill: Color { MirageTheme.trackpadSurfaceFill(colorScheme) }
     private var surfaceShadowColor: Color {
         colorScheme == .dark ? .black.opacity(0.3) : .black.opacity(0.07)
     }
@@ -32,10 +28,10 @@ struct TrackpadView: View {
             // ── Trackpad surface ──────────────────────────────────────
             ZStack {
                 // Background glass
-                RoundedRectangle(cornerRadius: 28)
+                RoundedRectangle(cornerRadius: MirageTheme.Radius.hero)
                     .fill(surfaceFill)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 28)
+                        RoundedRectangle(cornerRadius: MirageTheme.Radius.hero)
                             .strokeBorder(Color.primary.opacity(0.09), lineWidth: 1)
                     )
                     .shadow(color: surfaceShadowColor, radius: 16, y: 8)
@@ -73,7 +69,7 @@ struct TrackpadView: View {
                     sensitivity: sensitivity,
                     scrollMode: scrollMode
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 28))
+                .clipShape(RoundedRectangle(cornerRadius: MirageTheme.Radius.hero))
 
                 // ── Gesture indicator (top-left corner) ──────────────
                 VStack {
@@ -102,7 +98,7 @@ struct TrackpadView: View {
                 // ── Ripple effect on tap ──────────────────────────────
                 if let pos = ripplePos, rippleVisible {
                     Circle()
-                        .fill(Color(hex: "6C63FF").opacity(0.35))
+                        .fill(MirageTheme.violet.opacity(0.35))
                         .frame(width: 60, height: 60)
                         .scaleEffect(rippleVisible ? 2.0 : 0.5)
                         .opacity(rippleVisible ? 0 : 1)
@@ -220,9 +216,9 @@ private struct GestureIndicator: View {
 
     private var iconColor: Color {
         switch gesture {
-        case .cursor: Color(hex: "6C63FF")
-        case .scroll: Color(hex: "10B981")
-        case .threeFingerSwipe: Color(hex: "38BDF8")
+        case .cursor: MirageTheme.violet
+        case .scroll: MirageTheme.emerald
+        case .threeFingerSwipe: MirageTheme.sky
         }
     }
 }
@@ -239,19 +235,19 @@ struct GestureButtonBar: View {
             // Scroll mode toggle — highlighted when active
             ScrollToggleButton(isActive: $scrollMode, colorScheme: colorScheme)
 
-            GestureButton(label: "Left Click",   icon: "cursorarrow.click",              color: Color(hex: "6C63FF"), haptic: .medium, colorScheme: colorScheme) {
+            GestureButton(label: "Left Click",   icon: "cursorarrow.click",              color: MirageTheme.violet, haptic: .medium, colorScheme: colorScheme) {
                 Task { await sender.sendClick(.left) }
             }
-            GestureButton(label: "Right Click",  icon: "cursorarrow.click.2",            color: Color(hex: "A78BFA"), haptic: .heavy,  colorScheme: colorScheme) {
+            GestureButton(label: "Right Click",  icon: "cursorarrow.click.2",            color: MirageTheme.violetSoft, haptic: .heavy,  colorScheme: colorScheme) {
                 Task { await sender.sendClick(.right) }
             }
-            GestureButton(label: "Double Click", icon: "cursorarrow.click.badge.clock",  color: Color(hex: "818CF8"), haptic: .double, colorScheme: colorScheme) {
+            GestureButton(label: "Double Click", icon: "cursorarrow.click.badge.clock",  color: MirageTheme.indigo, haptic: .double, colorScheme: colorScheme) {
                 Task { await sender.sendDoubleClick(.left) }
             }
-            GestureButton(label: "Mission", icon: "macwindow.on.rectangle", color: Color(hex: "38BDF8"), haptic: .light, colorScheme: colorScheme) {
+            GestureButton(label: "Mission", icon: "macwindow.on.rectangle", color: MirageTheme.sky, haptic: .light, colorScheme: colorScheme) {
                 Task { await sender.sendMacro("missioncontrol_trigger") }
             }
-            GestureButton(label: "Desktop", icon: "menubar.rectangle",       color: Color(hex: "34D399"), haptic: .light, colorScheme: colorScheme) {
+            GestureButton(label: "Desktop", icon: "menubar.rectangle",       color: MirageTheme.mint, haptic: .light, colorScheme: colorScheme) {
                 Task { await sender.sendShortcut(["fn", "f11"]) }
             }
         }
@@ -274,18 +270,18 @@ private struct ScrollToggleButton: View {
                 Image(systemName: isActive ? "scroll.fill" : "scroll")
                     .font(.system(size: 28, weight: .thin))
                     .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isActive ? Color(hex: "10B981") : Color(hex: "10B981").opacity(0.6))
+                    .foregroundStyle(isActive ? MirageTheme.emerald : MirageTheme.emerald.opacity(0.6))
                     .frame(height: 34)
                 Text("Scroll")
                     .font(.system(size: 8.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(isActive ? Color(hex: "10B981") : Color.secondary.opacity(0.8))
+                    .foregroundStyle(isActive ? MirageTheme.emerald : Color.secondary.opacity(0.8))
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 62)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(isActive ? Color(hex: "10B981").opacity(colorScheme == .dark ? 0.15 : 0.1) : Color.clear)
+                RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
+                    .fill(isActive ? MirageTheme.emerald.opacity(colorScheme == .dark ? 0.15 : 0.1) : Color.clear)
             )
             .scaleEffect(isActive ? 0.95 : 1.0)
         }
@@ -349,7 +345,7 @@ struct GestureButton: View {
             .frame(maxWidth: .infinity)
             .frame(height: 62)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
                     .fill(isPressed ? color.opacity(colorScheme == .dark ? 0.15 : 0.1) : Color.clear)
                     .animation(.easeOut(duration: 0.12), value: isPressed)
             )

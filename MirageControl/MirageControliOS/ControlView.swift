@@ -37,33 +37,18 @@ struct ControlView: View {
         }
     }
 
-    // MARK: - Adaptive colours
-
-    private var bg: Color {
-        colorScheme == .dark ? Color(hex: "0A0A0F") : Color(UIColor.systemGroupedBackground)
-    }
-    private var navBorder: Color {
-        colorScheme == .dark ? .white.opacity(0.07) : Color.primary.opacity(0.08)
-    }
-    private var tabContainerFill: Color {
-        colorScheme == .dark ? .white.opacity(0.06) : Color(UIColor.systemFill)
-    }
-    private var tabContainerBorder: Color {
-        colorScheme == .dark ? .white.opacity(0.09) : Color.primary.opacity(0.06)
-    }
-
     var body: some View {
         ZStack {
-            bg.ignoresSafeArea()
+            MirageTheme.canvasBackground(colorScheme).ignoresSafeArea()
 
             if let sender {
                 VStack(spacing: 0) {
                     navBar
-                    Divider().overlay(navBorder)
+                    Divider().overlay(MirageTheme.navDivider(colorScheme))
                     tabSwitcher
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                    Divider().overlay(navBorder)
+                    Divider().overlay(MirageTheme.navDivider(colorScheme))
 
                     Group {
                         switch selectedTab {
@@ -200,9 +185,9 @@ struct ControlView: View {
                     .foregroundStyle(Color.primary)
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(Color(hex: "22C55E"))
+                        .fill(MirageTheme.success)
                         .frame(width: 6, height: 6)
-                        .shadow(color: Color(hex: "22C55E").opacity(0.8), radius: 4)
+                        .shadow(color: MirageTheme.success.opacity(0.8), radius: 4)
 
                     if let app = activeAppName {
                         Text(app)
@@ -307,11 +292,11 @@ struct ControlView: View {
         }
         .padding(4)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(tabContainerFill)
+            RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
+                .fill(MirageTheme.tabContainerFill(colorScheme))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(tabContainerBorder, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
+                        .strokeBorder(MirageTheme.tabContainerBorder(colorScheme), lineWidth: 1)
                 )
         )
     }
@@ -325,9 +310,6 @@ private struct TabPill: View {
     let colorScheme: ColorScheme
     let action: () -> Void
 
-    private var activeFill: Color {
-        colorScheme == .dark ? .white.opacity(0.14) : Color(UIColor.systemBackground)
-    }
     private var activeShadow: Color {
         colorScheme == .dark ? .clear : .black.opacity(0.06)
     }
@@ -344,8 +326,8 @@ private struct TabPill: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
             .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(isSelected ? activeFill : Color.clear)
+                RoundedRectangle(cornerRadius: MirageTheme.Radius.md - 3, style: .continuous)
+                    .fill(isSelected ? MirageTheme.tabPillSelectedFill(colorScheme) : Color.clear)
                     .shadow(color: activeShadow, radius: 4, y: 1)
                     .animation(.spring(response: 0.28, dampingFraction: 0.75), value: isSelected)
             )

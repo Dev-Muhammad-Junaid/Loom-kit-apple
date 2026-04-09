@@ -23,7 +23,7 @@ struct MacMenuBarView: View {
                     Circle()
                         .fill(
                             LinearGradient(
-                                colors: [Color(hex: "6C63FF"), Color(hex: "A78BFA")],
+                                colors: MirageTheme.headerGradientColors,
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
@@ -42,9 +42,9 @@ struct MacMenuBarView: View {
                 }
                 Spacer()
                 Circle()
-                    .fill(loomContext.isRunning ? Color.green : Color.orange)
+                    .fill(loomContext.isRunning ? MirageTheme.success : Color.orange)
                     .frame(width: 8, height: 8)
-                    .shadow(color: loomContext.isRunning ? .green.opacity(0.6) : .orange.opacity(0.6), radius: 4)
+                    .shadow(color: loomContext.isRunning ? MirageTheme.success.opacity(0.6) : .orange.opacity(0.6), radius: 4)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -75,11 +75,11 @@ struct MacMenuBarView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "ipad.and.iphone")
                         .font(.system(size: 32))
-                        .foregroundStyle(Color(hex: "6C63FF").opacity(0.7))
+                        .foregroundStyle(MirageTheme.violet.opacity(0.7))
                     Text("Waiting for Connection Request...")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
-                    Text("Open MirageControl on your iPhone,iPad\nand select this Mac.")
+                    Text("Open MirageControl on your iPhone or iPad\nand select this Mac.")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
@@ -147,7 +147,7 @@ private struct ConnectionRow: View {
         HStack(spacing: 10) {
             Image(systemName: "ipad.landscape")
                 .font(.system(size: 14))
-                .foregroundStyle(Color(hex: "6C63FF"))
+                .foregroundStyle(MirageTheme.violet)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.peerName)
@@ -172,7 +172,7 @@ private struct ConnectionRow: View {
                 .help("Remove Authorization & Disconnect")
             } else {
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(MirageTheme.success)
                     .font(.system(size: 12))
             }
         }
@@ -214,7 +214,7 @@ private struct PendingConnectionRow: View {
                     authManager.authorize(connection: connection)
                 } label: {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(MirageTheme.success)
                         .font(.system(size: 16))
                 }
                 .buttonStyle(.plain)
@@ -233,23 +233,5 @@ private struct PendingConnectionRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 5)
-    }
-}
-
-// MARK: - Color+Hex
-
-extension Color {
-    init(hex: String) {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        let a, r, g, b: UInt64
-        switch hex.count {
-        case 3: (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
-        case 6: (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
-        case 8: (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
-        default:(a, r, g, b) = (255, 0, 0, 0)
-        }
-        self.init(.sRGB, red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255, opacity: Double(a)/255)
     }
 }

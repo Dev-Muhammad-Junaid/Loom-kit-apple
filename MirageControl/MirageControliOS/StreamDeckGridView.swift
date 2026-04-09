@@ -65,8 +65,8 @@ struct StreamDeckGridView: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(colorScheme == .dark ? .white.opacity(0.06) : Color(UIColor.systemFill))
+                    RoundedRectangle(cornerRadius: MirageTheme.Radius.sm, style: .continuous)
+                        .fill(MirageTheme.searchFieldFill(colorScheme))
                 )
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
@@ -263,8 +263,8 @@ private struct AppButton: View {
                 .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
         } else {
             // Fallback SF Symbol
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.07))
+            RoundedRectangle(cornerRadius: MirageTheme.Radius.sm, style: .continuous)
+                .fill(MirageTheme.subtleWellFill(colorScheme))
                 .frame(width: 52, height: 52)
                 .overlay(
                     Image(systemName: "app")
@@ -313,9 +313,9 @@ private struct QuickActionButton: View {
 
     private var iconColor: Color {
         switch item {
-        case .shortcut: Color(hex: "A78BFA")
+        case .shortcut: MirageTheme.violetSoft
         case .media:    Color.primary.opacity(0.8)
-        case .app:      Color(hex: "6C63FF")
+        case .app:      MirageTheme.violet
         }
     }
 }
