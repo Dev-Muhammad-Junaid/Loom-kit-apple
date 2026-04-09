@@ -3,6 +3,7 @@
 //  MirageControlMac
 //
 
+import Loom
 import LoomKit
 import SwiftUI
 
@@ -10,6 +11,7 @@ struct MacMenuBarView: View {
     @Environment(\.loomContext) private var loomContext
     @EnvironmentObject private var authManager: DeviceAuthorizationManager
     @LoomQuery(.connections(sort: .connectedAtDescending)) private var connections: [LoomConnectionSnapshot]
+    @LoomQuery(.peers(sort: .name)) private var peers: [LoomPeerSnapshot]
 
     let receiver: ControlReceiver
 
@@ -40,11 +42,7 @@ struct MacMenuBarView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Circle()
-                    .fill(loomContext.isRunning ? MirageTheme.success : Color.orange)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: loomContext.isRunning ? MirageTheme.success.opacity(0.6) : .orange.opacity(0.6), radius: 4)
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -63,7 +61,11 @@ struct MacMenuBarView: View {
                         .padding(.top, 10)
 
                     ForEach(authManager.pendingConnections) { connection in
-                        PendingConnectionRow(connection: connection, loomContext: loomContext)
+                        PendingConnectionRow(
+                            connection: connection,
+                            loomContext: loomContext,
+                            deviceSystemImage: deviceSystemImage(for: connection)
+                        )
                     }
                 }
                 .padding(.bottom, 8)
@@ -95,7 +97,11 @@ struct MacMenuBarView: View {
                         .padding(.top, 10)
 
                     ForEach(authorizedConnections) { connection in
-                        ConnectionRow(connection: connection, loomContext: loomContext)
+                        ConnectionRow(
+                            connection: connection,
+                            loomContext: loomContext,
+                            deviceSystemImage: deviceSystemImage(for: connection)
+                        )
                     }
                 }
                 .padding(.bottom, 8)
@@ -133,6 +139,19 @@ struct MacMenuBarView: View {
         .frame(width: 270)
         .background(.regularMaterial)
     }
+
+    /// Resolves iPhone vs iPad (etc.) from the live peer list; Mirage remote is iOS-only so unknown falls back to phone.
+    private func deviceSystemImage(for connection: LoomConnectionSnapshot) -> String {
+        guard let peer = peers.first(where: { $0.id == connection.peerID }) else {
+            return DeviceType.iPhone.systemImage
+        }
+        switch peer.deviceType {
+        case .unknown:
+            return DeviceType.iPhone.systemImage
+        default:
+            return peer.deviceType.systemImage
+        }
+    }
 }
 
 // MARK: - ConnectionRow
@@ -140,15 +159,17 @@ struct MacMenuBarView: View {
 private struct ConnectionRow: View {
     let connection: LoomConnectionSnapshot
     let loomContext: LoomContext
+    let deviceSystemImage: String
     @EnvironmentObject private var authManager: DeviceAuthorizationManager
     @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "ipad.landscape")
-                .font(.system(size: 14))
+            Image(systemName: deviceSystemImage)
+                .font(.system(size: 15, weight: .regular))
+                .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(MirageTheme.violet)
-                .frame(width: 24)
+                .frame(width: 24, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.peerName)
                     .font(.system(size: 12, weight: .semibold))
@@ -177,7 +198,7 @@ private struct ConnectionRow: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
         .onHover { isHovering = $0 }
     }
 }
@@ -187,14 +208,16 @@ private struct ConnectionRow: View {
 private struct PendingConnectionRow: View {
     let connection: LoomConnectionSnapshot
     let loomContext: LoomContext
+    let deviceSystemImage: String
     @EnvironmentObject private var authManager: DeviceAuthorizationManager
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 14))
+            Image(systemName: deviceSystemImage)
+                .font(.system(size: 15, weight: .regular))
+                .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(.orange)
-                .frame(width: 24)
+                .frame(width: 24, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.peerName)
                     .font(.system(size: 12, weight: .semibold))
@@ -232,6 +255,6 @@ private struct PendingConnectionRow: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
     }
 }

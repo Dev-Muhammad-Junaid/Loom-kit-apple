@@ -58,7 +58,7 @@ struct PeerPickerView: View {
                         )
                         .padding(.horizontal, 24)
                         .padding(.top, 8)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(.opacity)
                 }
 
                 Spacer()

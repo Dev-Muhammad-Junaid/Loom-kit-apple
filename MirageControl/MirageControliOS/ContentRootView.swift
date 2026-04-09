@@ -19,7 +19,7 @@ struct ContentRootView: View {
                         connection: connection.handle,
                         peerName: connection.peerName,
                         onAuthStatusChanged: { status in
-                            withAnimation(.spring(duration: 0.3)) {
+                            withAnimation(.easeInOut(duration: 0.22)) {
                                 authStatus = status
                             }
                         },
@@ -29,7 +29,7 @@ struct ContentRootView: View {
                             authStatus = "pending"
                         }
                     )
-                    .blur(radius: authStatus == "granted" ? 0 : 15)
+                    .opacity(authStatus == "granted" ? 1 : 0.38)
                     .disabled(authStatus != "granted")
 
                     if authStatus != "granted" {
@@ -44,10 +44,7 @@ struct ContentRootView: View {
                         .transition(.opacity)
                     }
                 }
-                .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
-                    removal: .move(edge: .leading).combined(with: .opacity)
-                ))
+                .transition(.opacity)
                 .task(id: connection.peerName) {
                     authStatus = "pending"
 
@@ -58,7 +55,7 @@ struct ContentRootView: View {
                         if case .disconnected = event {
                             await MainActor.run {
                                 if authStatus != "denied" {
-                                    withAnimation(.spring(duration: 0.3)) {
+                                    withAnimation(.easeInOut(duration: 0.22)) {
                                         authStatus = "host_disconnected"
                                     }
                                 }
@@ -69,14 +66,14 @@ struct ContentRootView: View {
                 }
             } else {
                 PeerPickerView { handle, peerName in
-                    withAnimation(.spring(duration: 0.45)) {
+                    withAnimation(.easeInOut(duration: 0.28)) {
                         activeConnection = (handle, peerName)
                     }
                 }
                 .transition(.opacity)
             }
         }
-        .animation(.spring(duration: 0.45), value: activeConnection != nil)
+        .animation(.easeInOut(duration: 0.28), value: activeConnection != nil)
         .task {
             do {
                 print("MirageControliOS: 🚀 Attempting to start LoomContext...")

@@ -125,7 +125,7 @@ struct ScreenshotPreviewView: View {
                             Capsule().fill(.white.opacity(0.18))
                         )
                         .padding(.bottom, 10)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(.opacity)
                 }
 
                 // Action row
