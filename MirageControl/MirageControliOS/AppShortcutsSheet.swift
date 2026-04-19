@@ -25,10 +25,88 @@ struct AppShortcutsSheet: View {
 
     private var bindings: [AppShortcutBinding] { store.bindings(for: app.bundleID) }
 
+    /// Per-session expand/collapse state for category sections. Defaults are
+    /// set lazily in `isExpanded(_:)` — system-ish categories (Window, Help,
+    /// Apple) start collapsed, everything else expanded.
+    @State private var expandedOverrides: [String: Bool] = [:]
+
     private let columns = [
         GridItem(.flexible(), spacing: 10),
         GridItem(.flexible(), spacing: 10),
     ]
+
+    // MARK: - Sectioning
+
+    /// Top-level menus that the user almost certainly doesn't care about by
+    /// default — these come from macOS itself and appear in every app's
+    /// menu bar. Start collapsed; expose a disclosure chevron so the user
+    /// can still dig in when they want a window-tiling shortcut.
+    private static let collapsedByDefault: Set<String> = [
+        "Window", "Help", "Apple", "Services", "Edit"
+    ]
+
+    private struct Section: Identifiable {
+        let id: String            // "" = "My Shortcuts"
+        let title: String
+        let bindings: [AppShortcutBinding]
+        let collapsible: Bool
+    }
+
+    private var sections: [Section] {
+        var uncategorized: [AppShortcutBinding] = []
+        var grouped: [String: [AppShortcutBinding]] = [:]
+        var insertionOrder: [String] = []
+
+        for binding in bindings {
+            if let category = binding.effectiveCategory {
+                if grouped[category] == nil {
+                    grouped[category] = []
+                    insertionOrder.append(category)
+                }
+                grouped[category]!.append(binding)
+            } else {
+                uncategorized.append(binding)
+            }
+        }
+
+        var result: [Section] = []
+        if !uncategorized.isEmpty {
+            result.append(Section(
+                id: "",
+                title: "My Shortcuts",
+                bindings: uncategorized,
+                collapsible: false
+            ))
+        }
+
+        // App-specific menus (File, View, app name) first, then system menus.
+        let sorted = insertionOrder.sorted { lhs, rhs in
+            let lSystem = Self.collapsedByDefault.contains(lhs)
+            let rSystem = Self.collapsedByDefault.contains(rhs)
+            if lSystem != rSystem { return !lSystem }   // non-system first
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        for category in sorted {
+            result.append(Section(
+                id: category,
+                title: category,
+                bindings: grouped[category] ?? [],
+                collapsible: true
+            ))
+        }
+        return result
+    }
+
+    private func isExpanded(_ section: Section) -> Bool {
+        if let override = expandedOverrides[section.id] { return override }
+        return !Self.collapsedByDefault.contains(section.id)
+    }
+
+    private func toggle(_ section: Section) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            expandedOverrides[section.id] = !isExpanded(section)
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -45,18 +123,9 @@ struct AppShortcutsSheet: View {
                         if bindings.isEmpty {
                             emptyState
                         } else {
-                            LazyVGrid(columns: columns, spacing: 10) {
-                                ForEach(bindings) { binding in
-                                    ShortcutCard(
-                                        binding: binding,
-                                        colorScheme: colorScheme,
-                                        onTap: { trigger(binding) },
-                                        onEdit: binding.isCurated ? nil : { editing = binding },
-                                        onDelete: { delete(binding) }
-                                    )
-                                }
+                            ForEach(sections) { section in
+                                sectionView(section)
                             }
-                            .padding(.horizontal, 20)
                             .padding(.bottom, 24)
                         }
                     }
@@ -139,6 +208,72 @@ struct AppShortcutsSheet: View {
             ShortcutEditor(bundleID: app.bundleID, existing: binding) { updated in
                 store.updateCustom(updated)
             }
+        }
+    }
+
+    // MARK: - Section
+
+    @ViewBuilder
+    private func sectionView(_ section: Section) -> some View {
+        let expanded = isExpanded(section)
+        let useShortNames = !section.id.isEmpty
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(section, expanded: expanded)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+
+            if expanded {
+                LazyVGrid(columns: columns, spacing: 10) {
+                    ForEach(section.bindings) { binding in
+                        ShortcutCard(
+                            binding: binding,
+                            colorScheme: colorScheme,
+                            useShortName: useShortNames,
+                            onTap: { trigger(binding) },
+                            onEdit: binding.isCurated ? nil : { editing = binding },
+                            onDelete: { delete(binding) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 6)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sectionHeader(_ section: Section, expanded: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(section.title.uppercased())
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.secondary.opacity(0.85))
+                .tracking(0.5)
+
+            Text("\(section.bindings.count)")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule().fill(Color.primary.opacity(0.07))
+                )
+
+            Spacer()
+
+            if section.collapsible {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+                    .rotationEffect(.degrees(expanded ? 0 : -90))
+                    .animation(.easeInOut(duration: 0.2), value: expanded)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard section.collapsible else { return }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            toggle(section)
         }
     }
 
@@ -269,11 +404,19 @@ struct AppShortcutsSheet: View {
 private struct ShortcutCard: View {
     let binding: AppShortcutBinding
     let colorScheme: ColorScheme
+    /// When `true`, renders `binding.shortDisplayName` — strips the leading
+    /// `Category › ` prefix because the category is already shown as the
+    /// section header above the card.
+    let useShortName: Bool
     let onTap: () -> Void
     let onEdit: (() -> Void)?
     let onDelete: () -> Void
 
     @State private var isPressed = false
+
+    private var label: String {
+        useShortName ? binding.shortDisplayName : binding.displayName
+    }
 
     var body: some View {
         Button(action: onTap) {
@@ -284,7 +427,7 @@ private struct ShortcutCard: View {
                     .foregroundStyle(MirageTheme.violet)
                     .frame(width: 22, height: 22)
 
-                Text(binding.displayName)
+                Text(label)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.primary)
                     .lineLimit(1)

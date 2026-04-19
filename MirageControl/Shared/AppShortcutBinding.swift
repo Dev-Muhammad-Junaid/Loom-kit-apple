@@ -21,6 +21,11 @@ public struct AppShortcutBinding: Identifiable, Codable, Hashable, Sendable {
     /// curated bindings but cannot edit them — the UI offers a "Duplicate &
     /// Edit" affordance instead.
     public let isCurated: Bool
+    /// Top-level menu the binding was discovered under (e.g. `"Window"`,
+    /// `"Help"`, `"File"`). `nil` for curated and user-authored entries that
+    /// aren't tied to a specific menu. Used by the iPad UI to section
+    /// imported shortcuts and collapse system-ish categories.
+    public let category: String?
 
     public init(
         id: String = UUID().uuidString,
@@ -28,7 +33,8 @@ public struct AppShortcutBinding: Identifiable, Codable, Hashable, Sendable {
         displayName: String,
         keys: [String],
         sfSymbol: String = "keyboard",
-        isCurated: Bool = false
+        isCurated: Bool = false,
+        category: String? = nil
     ) {
         self.id = id
         self.bundleID = bundleID
@@ -36,6 +42,25 @@ public struct AppShortcutBinding: Identifiable, Codable, Hashable, Sendable {
         self.keys = keys
         self.sfSymbol = sfSymbol
         self.isCurated = isCurated
+        self.category = category
+    }
+
+    /// `displayName` with the leading `Category › ` prefix stripped. Falls
+    /// back to the full name if no prefix is present. Useful when the UI
+    /// already shows the category as a section header.
+    public var shortDisplayName: String {
+        guard let range = displayName.range(of: " › ") else { return displayName }
+        return String(displayName[range.upperBound...])
+    }
+
+    /// Returns the binding's `category`, falling back to the leading segment
+    /// of its `displayName` (`"Window"` from `"Window › Center"`). Lets the
+    /// iPad group shortcuts that were imported *before* we started storing
+    /// the field explicitly.
+    public var effectiveCategory: String? {
+        if let category, !category.isEmpty { return category }
+        guard let range = displayName.range(of: " › ") else { return nil }
+        return String(displayName[..<range.lowerBound])
     }
 
     /// Human-readable rendering (e.g. `⌘⇧P`) for the UI. Uses macOS glyphs

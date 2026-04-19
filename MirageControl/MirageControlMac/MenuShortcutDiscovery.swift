@@ -89,7 +89,8 @@ enum MenuShortcutDiscovery {
                 displayName: display,
                 keys: keys,
                 sfSymbol: sfSymbolGuess(for: display),
-                isCurated: false
+                isCurated: false,
+                category: path.first
             )
         }
 
