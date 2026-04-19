@@ -18,7 +18,13 @@ actor TrackpadSender {
     // data is thrown away.  On non-ProMotion iPads (60 Hz) this just
     // means the cap is never hit.
     private let minimumInterval: Double = 1.0 / 120.0
-    private var lastSentAt: Double = 0          // CACurrentMediaTime()
+
+    // Independent timestamps so that continuous scrolling doesn't starve
+    // mouse movement (and vice versa). Previously both streams shared
+    // `lastSentAt`, which meant fast scroll input could delay cursor
+    // updates by up to 8 ms per tick.
+    private var lastMouseSentAt: Double = 0     // CACurrentMediaTime()
+    private var lastScrollSentAt: Double = 0
 
     // ── Delta accumulator ───────────────────────────────────────────
     private var pendingDeltaX: Float = 0
@@ -41,7 +47,7 @@ actor TrackpadSender {
         pendingDeltaY += dy
 
         let now = CACurrentMediaTime()
-        let elapsed = now - lastSentAt
+        let elapsed = now - lastMouseSentAt
 
         if elapsed >= minimumInterval {
             await flushMouseDelta()
@@ -63,7 +69,7 @@ actor TrackpadSender {
         let dy = pendingDeltaY
         pendingDeltaX = 0
         pendingDeltaY = 0
-        lastSentAt = CACurrentMediaTime()
+        lastMouseSentAt = CACurrentMediaTime()
 
         await send(.mouseDelta(dx: dx, dy: dy))
     }
@@ -75,7 +81,7 @@ actor TrackpadSender {
         pendingScrollDY += dy
 
         let now = CACurrentMediaTime()
-        let elapsed = now - lastSentAt
+        let elapsed = now - lastScrollSentAt
 
         if elapsed >= minimumInterval {
             await flushScroll()
@@ -97,7 +103,7 @@ actor TrackpadSender {
         let dy = pendingScrollDY
         pendingScrollDX = 0
         pendingScrollDY = 0
-        lastSentAt = CACurrentMediaTime()
+        lastScrollSentAt = CACurrentMediaTime()
 
         await send(.mouseScroll(dx: dx, dy: dy))
     }
@@ -122,6 +128,19 @@ actor TrackpadSender {
 
     func sendLaunchApp(_ bundleID: String) async {
         await send(.launchApp(bundleID: bundleID))
+    }
+
+    /// Activate `bundleID` on the Mac and inject `keys` once it's frontmost.
+    /// Single message — the host coordinates the ordering so the shortcut
+    /// doesn't leak into whatever window was previously focused.
+    func sendAppShortcut(bundleID: String, keys: [String]) async {
+        await send(.appShortcut(bundleID: bundleID, keys: keys))
+    }
+
+    /// Asks the Mac to walk `bundleID`'s menu bar via Accessibility and
+    /// return every shortcut it advertises.
+    func requestMenuShortcuts(bundleID: String) async {
+        await send(.requestAppMenuShortcuts(bundleID: bundleID))
     }
 
     func sendMediaAction(_ action: String) async {

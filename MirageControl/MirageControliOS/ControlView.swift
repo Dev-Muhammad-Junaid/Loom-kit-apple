@@ -6,6 +6,12 @@
 import LoomKit
 import SwiftUI
 
+extension Notification.Name {
+    /// Broadcast when the Mac replies to a menu-shortcut import request.
+    /// userInfo keys: `bundleID` (String), `added` (Int), `total` (Int).
+    static let appMenuShortcutsImported = Notification.Name("MirageControl.appMenuShortcutsImported")
+}
+
 struct ControlView: View {
     let connection: LoomConnectionHandle
     let peerName: String
@@ -18,6 +24,7 @@ struct ControlView: View {
 
     // Bidirectional state
     @State private var activeAppName: String?
+    @State private var activeBundleID: String?
     @State private var installedApps: [InstalledAppInfo] = []
     @State private var screenshotImage: UIImage?
     @State private var isRequestingScreenshot = false   // in-flight guard
@@ -55,7 +62,12 @@ struct ControlView: View {
                         case .trackpad:
                             TrackpadView(sender: sender, colorScheme: colorScheme)
                         case .streamdeck:
-                            StreamDeckGridView(sender: sender, colorScheme: colorScheme, installedApps: installedApps)
+                            StreamDeckGridView(
+                                sender: sender,
+                                colorScheme: colorScheme,
+                                installedApps: installedApps,
+                                activeBundleID: activeBundleID
+                            )
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,7 +143,13 @@ struct ControlView: View {
 
     private func listenForHostMessages() async {
         for await data in connection.messages {
-            guard let message = try? JSONDecoder().decode(ControlMessage.self, from: data) else {
+            let message: ControlMessage
+            do {
+                message = try JSONDecoder().decode(ControlMessage.self, from: data)
+            } catch {
+                #if DEBUG
+                print("MirageControliOS: ⚠️ Failed to decode ControlMessage (\(data.count)B): \(error)")
+                #endif
                 continue
             }
             await MainActor.run {
@@ -139,9 +157,10 @@ struct ControlView: View {
                 case let .authorizationStatus(status):
                     onAuthStatusChanged(status)
 
-                case let .activeAppUpdate(name, _):
+                case let .activeAppUpdate(name, bundleID):
                     withAnimation(.easeInOut(duration: 0.2)) {
                         activeAppName = name
+                        activeBundleID = bundleID
                     }
 
                 case let .screenshotData(data):
@@ -168,6 +187,18 @@ struct ControlView: View {
                     }
                     // Cache to disk for instant display on next connect
                     Self.cacheAppList(apps)
+
+                case let .appMenuShortcutsResponse(bundleID, shortcuts):
+                    let added = ShortcutStore.shared.importBindings(shortcuts, for: bundleID)
+                    NotificationCenter.default.post(
+                        name: .appMenuShortcutsImported,
+                        object: nil,
+                        userInfo: [
+                            "bundleID": bundleID,
+                            "added": added,
+                            "total": shortcuts.count
+                        ]
+                    )
 
                 default:
                     break

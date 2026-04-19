@@ -65,9 +65,14 @@ final class InstalledAppScanner {
             }
         }
 
-        let sorted = apps.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-        // Cap at 50 apps to keep the initial payload small
-        return Array(sorted.prefix(50))
+        // No artificial cap — even with ~500 apps, 64×64 JPEG icons keep the
+        // payload around 1.5 MB, which streams across Loom in well under a
+        // second on local Wi-Fi. If this ever becomes a bottleneck we should
+        // paginate via a `requestAppListPage(offset:)` message rather than
+        // silently truncate the alphabet.
+        return apps.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
     }
 
     /// Reads bundle metadata and extracts a small icon for the given .app URL.

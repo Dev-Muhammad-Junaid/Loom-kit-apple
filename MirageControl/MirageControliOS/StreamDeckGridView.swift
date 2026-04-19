@@ -12,6 +12,10 @@ struct StreamDeckGridView: View {
     let sender: TrackpadSender
     let colorScheme: ColorScheme
     let installedApps: [InstalledAppInfo]
+    /// Bundle ID of whichever app is currently frontmost on the Mac.
+    /// Rendered as a colored selection ring on the matching tile; tapping
+    /// that tile opens the shortcuts sheet directly (no relaunch).
+    let activeBundleID: String?
 
     // Persisted user preferences
     @AppStorage("pinnedBundleIDs") private var pinnedData: Data = Data()
@@ -20,6 +24,7 @@ struct StreamDeckGridView: View {
     @State private var pinnedIDs: Set<String> = []
     @State private var hiddenIDs: Set<String> = []
     @State private var searchText: String = ""
+    @State private var sheetApp: InstalledAppInfo?
 
     // Static shortcuts & media
     private let shortcuts: [MacroItem] = [
@@ -102,8 +107,11 @@ struct StreamDeckGridView: View {
                     SectionHeader(title: "PINNED APPS")
                     LazyVGrid(columns: columns, spacing: 20) {
                         ForEach(pinnedApps) { app in
-                            AppButton(app: app, isPinned: true, colorScheme: colorScheme,
-                                      onTap: { launchApp(app) },
+                            AppButton(app: app,
+                                      isPinned: true,
+                                      isActive: app.bundleID == activeBundleID,
+                                      colorScheme: colorScheme,
+                                      onTap: { handleTap(app) },
                                       onPin: { togglePin(app) },
                                       onHide: { hideApp(app) })
                         }
@@ -117,9 +125,11 @@ struct StreamDeckGridView: View {
                     SectionHeader(title: searchText.isEmpty ? "ALL APPS" : "RESULTS")
                     LazyVGrid(columns: columns, spacing: 20) {
                         ForEach(filteredApps) { app in
-                            AppButton(app: app, isPinned: pinnedIDs.contains(app.bundleID),
+                            AppButton(app: app,
+                                      isPinned: pinnedIDs.contains(app.bundleID),
+                                      isActive: app.bundleID == activeBundleID,
                                       colorScheme: colorScheme,
-                                      onTap: { launchApp(app) },
+                                      onTap: { handleTap(app) },
                                       onPin: { togglePin(app) },
                                       onHide: { hideApp(app) })
                         }
@@ -133,13 +143,28 @@ struct StreamDeckGridView: View {
         }
         .background(Color.clear)
         .onAppear { loadPreferences() }
+        .sheet(item: $sheetApp) { app in
+            AppShortcutsSheet(app: app, sender: sender) {
+                sheetApp = nil
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     // MARK: - Actions
 
-    private func launchApp(_ app: InstalledAppInfo) {
+    /// Tap behaviour:
+    /// - If this app is already frontmost on the Mac, open the shortcuts
+    ///   sheet immediately — don't re-launch.
+    /// - Otherwise send a `launchApp` so the Mac brings it to the front,
+    ///   then open the shortcuts sheet so the user can trigger one.
+    private func handleTap(_ app: InstalledAppInfo) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        Task { await sender.sendLaunchApp(app.bundleID) }
+        if app.bundleID != activeBundleID {
+            Task { await sender.sendLaunchApp(app.bundleID) }
+        }
+        sheetApp = app
     }
 
     private func togglePin(_ app: InstalledAppInfo) {
@@ -200,6 +225,7 @@ private struct SectionHeader: View {
 private struct AppButton: View {
     let app: InstalledAppInfo
     let isPinned: Bool
+    let isActive: Bool
     let colorScheme: ColorScheme
     let onTap: () -> Void
     let onPin: () -> Void
@@ -212,10 +238,11 @@ private struct AppButton: View {
             VStack(spacing: 8) {
                 appIcon
                     .frame(width: 52, height: 52)
+                    .overlay(activeRing)
 
                 Text(app.displayName)
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.secondary)
+                    .font(.system(size: 11, weight: isActive ? .semibold : .medium, design: .rounded))
+                    .foregroundStyle(isActive ? Color.primary : Color.secondary)
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
@@ -223,6 +250,7 @@ private struct AppButton: View {
             .frame(maxWidth: .infinity)
             .scaleEffect(isPressed ? 0.88 : 1.0)
             .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isPressed)
+            .animation(.easeInOut(duration: 0.2), value: isActive)
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
@@ -242,6 +270,16 @@ private struct AppButton: View {
             } label: {
                 Label("Hide App", systemImage: "eye.slash")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var activeRing: some View {
+        if isActive {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(MirageTheme.violet, lineWidth: 2.5)
+                .shadow(color: MirageTheme.violet.opacity(0.55), radius: 6)
+                .padding(-3)
         }
     }
 

@@ -28,10 +28,23 @@ public enum ControlMessage: Codable, Sendable {
     case requestAppList
     case appListResponse(apps: [InstalledAppInfo])
 
+    /// Activate `bundleID` on the Mac, wait for it to become frontmost, and
+    /// inject `keys`. Kept separate from `keyboardShortcut` so shortcut
+    /// triggers always land in the intended app, even when the user taps
+    /// quickly after launching something else.
+    case appShortcut(bundleID: String, keys: [String])
+
+    /// iPad asks the Mac to enumerate every shortcut in `bundleID`'s menu
+    /// bar via Accessibility, and reply with `appMenuShortcutsResponse`.
+    case requestAppMenuShortcuts(bundleID: String)
+    /// Host's reply to `requestAppMenuShortcuts`. Empty array means the app
+    /// wasn't running or had no menu shortcuts we could read.
+    case appMenuShortcutsResponse(bundleID: String, shortcuts: [AppShortcutBinding])
+
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, id, status, action, data, name, message, apps
+        case type, dx, dy, button, keys, bundleID, id, status, action, data, name, message, apps, shortcuts
     }
 
     private enum MessageType: String, Codable {
@@ -39,6 +52,8 @@ public enum ControlMessage: Codable, Sendable {
         case keyboardShortcut, launchApp, macroButton, authorizationStatus
         case requestScreenshot, mediaCommand, screenshotData, screenshotError, activeAppUpdate
         case requestAppList, appListResponse
+        case appShortcut
+        case requestAppMenuShortcuts, appMenuShortcutsResponse
     }
 
     public init(from decoder: Decoder) throws {
@@ -78,6 +93,20 @@ public enum ControlMessage: Codable, Sendable {
             self = .requestAppList
         case .appListResponse:
             self = .appListResponse(apps: try c.decode([InstalledAppInfo].self, forKey: .apps))
+        case .appShortcut:
+            self = .appShortcut(
+                bundleID: try c.decode(String.self, forKey: .bundleID),
+                keys: try c.decode([String].self, forKey: .keys)
+            )
+        case .requestAppMenuShortcuts:
+            self = .requestAppMenuShortcuts(
+                bundleID: try c.decode(String.self, forKey: .bundleID)
+            )
+        case .appMenuShortcutsResponse:
+            self = .appMenuShortcutsResponse(
+                bundleID: try c.decode(String.self, forKey: .bundleID),
+                shortcuts: try c.decode([AppShortcutBinding].self, forKey: .shortcuts)
+            )
         }
     }
 
@@ -128,6 +157,17 @@ public enum ControlMessage: Codable, Sendable {
         case let .appListResponse(apps):
             try c.encode(MessageType.appListResponse, forKey: .type)
             try c.encode(apps, forKey: .apps)
+        case let .appShortcut(bundleID, keys):
+            try c.encode(MessageType.appShortcut, forKey: .type)
+            try c.encode(bundleID, forKey: .bundleID)
+            try c.encode(keys, forKey: .keys)
+        case let .requestAppMenuShortcuts(bundleID):
+            try c.encode(MessageType.requestAppMenuShortcuts, forKey: .type)
+            try c.encode(bundleID, forKey: .bundleID)
+        case let .appMenuShortcutsResponse(bundleID, shortcuts):
+            try c.encode(MessageType.appMenuShortcutsResponse, forKey: .type)
+            try c.encode(bundleID, forKey: .bundleID)
+            try c.encode(shortcuts, forKey: .shortcuts)
         }
     }
 }

@@ -91,17 +91,20 @@ final class InputInjector {
         guard isAccessibilityGranted else { return }
         let pos = currentCGCursorPosition()
         let (downType, upType, cgBtn) = cgMouseTypes(for: button)
-        let clickCount = double ? 2 : 1
 
-        for _ in 0..<clickCount {
+        // macOS double-click convention: the *first* down/up pair has
+        // clickState = 1, the *second* has clickState = 2. Firing two pairs
+        // both with clickState = 2 is read as a triple-click by AppKit.
+        let states: [Int64] = double ? [1, 2] : [1]
+        for state in states {
             let down = CGEvent(mouseEventSource: nil, mouseType: downType,
                                mouseCursorPosition: pos, mouseButton: cgBtn)
-            down?.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
+            down?.setIntegerValueField(.mouseEventClickState, value: state)
             down?.post(tap: .cghidEventTap)
 
             let up = CGEvent(mouseEventSource: nil, mouseType: upType,
                              mouseCursorPosition: pos, mouseButton: cgBtn)
-            up?.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
+            up?.setIntegerValueField(.mouseEventClickState, value: state)
             up?.post(tap: .cghidEventTap)
         }
     }
@@ -110,20 +113,63 @@ final class InputInjector {
 
     /// Sends a keyboard shortcut specified as an array of key name strings.
     /// Example: ["cmd", "space"], ["cmd", "shift", "3"]
+    ///
+    /// Uses `.combinedSessionState` so the synthesized modifiers aren't
+    /// overridden by whatever modifier keys the user happens to be holding on
+    /// a physical keyboard. Posts modifier flag-changes as separate events
+    /// around the key event; some apps (Chrome, Electron apps, Cursor) drop
+    /// shortcuts when modifier flags arrive only as side-channel `flags` on
+    /// the keydown — they want to see real `flagsChanged` events.
     func sendShortcut(keys: [String]) {
         guard isAccessibilityGranted else { return }
         let (modifiers, keyCode) = parseKeys(keys)
-        guard let kc = keyCode else { return }
+        guard let kc = keyCode else {
+            #if DEBUG
+            print("MirageControl: ⚠️ Unknown shortcut key in \(keys)")
+            #endif
+            return
+        }
 
-        let src = CGEventSource(stateID: .hidSystemState)
+        let src = CGEventSource(stateID: .combinedSessionState)
 
-        let keyDown = CGEvent(keyboardEventSource: src, virtualKey: kc, keyDown: true)
-        keyDown?.flags = modifiers
-        keyDown?.post(tap: .cghidEventTap)
+        // 1. Press each modifier as a real flagsChanged event.
+        let mods = activeModifierKeys(modifiers)
+        for modKey in mods {
+            if let down = CGEvent(keyboardEventSource: src, virtualKey: modKey, keyDown: true) {
+                down.flags = modifiers
+                down.post(tap: .cghidEventTap)
+            }
+        }
 
-        let keyUp = CGEvent(keyboardEventSource: src, virtualKey: kc, keyDown: false)
-        keyUp?.flags = modifiers
-        keyUp?.post(tap: .cghidEventTap)
+        // 2. Press and release the non-modifier key with full flags attached.
+        if let keyDown = CGEvent(keyboardEventSource: src, virtualKey: kc, keyDown: true) {
+            keyDown.flags = modifiers
+            keyDown.post(tap: .cghidEventTap)
+        }
+        if let keyUp = CGEvent(keyboardEventSource: src, virtualKey: kc, keyDown: false) {
+            keyUp.flags = modifiers
+            keyUp.post(tap: .cghidEventTap)
+        }
+
+        // 3. Release modifiers in reverse order.
+        for modKey in mods.reversed() {
+            if let up = CGEvent(keyboardEventSource: src, virtualKey: modKey, keyDown: false) {
+                up.flags = []
+                up.post(tap: .cghidEventTap)
+            }
+        }
+    }
+
+    /// Maps a `CGEventFlags` set to the virtual key codes we need to press so
+    /// AppKit sees `flagsChanged` events for each modifier.
+    private func activeModifierKeys(_ flags: CGEventFlags) -> [CGKeyCode] {
+        var keys: [CGKeyCode] = []
+        if flags.contains(.maskCommand)     { keys.append(0x37) } // left cmd
+        if flags.contains(.maskShift)       { keys.append(0x38) } // left shift
+        if flags.contains(.maskAlternate)   { keys.append(0x3A) } // left option
+        if flags.contains(.maskControl)     { keys.append(0x3B) } // left control
+        if flags.contains(.maskSecondaryFn) { keys.append(0x3F) } // fn
+        return keys
     }
 
     // MARK: - Media Controls

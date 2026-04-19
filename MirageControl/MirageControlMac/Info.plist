@@ -33,5 +33,8 @@
     <!-- Accessibility usage (for CGEvent injection) -->
     <key>NSAccessibilityUsageDescription</key>
     <string>MirageControl needs Accessibility access to control the cursor and keyboard on behalf of your iPad.</string>
+    <!-- Screen Recording usage (ScreenCaptureKit) — required on macOS 14+/26 Tahoe -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>MirageControl captures your Mac screen so your iPad can preview it on demand.</string>
 </dict>
 </plist>

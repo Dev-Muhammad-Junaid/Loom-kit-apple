@@ -4,22 +4,47 @@
 //
 
 import LoomKit
+import SystemConfiguration
 import SwiftUI
 
 @MainActor
 final class MacDaemon: ObservableObject {
-    let container: LoomContainer
+    let container: LoomContainer?
     let receiver = ControlReceiver()
 
+    /// Populated when `LoomContainer` construction fails so the menu-bar UI can
+    /// show a real error instead of the app silently crashing on `try!`.
+    @Published var fatalStartupError: String?
+
+    /// Friendly computer name (e.g. "Junaid's MacBook Pro") using the modern
+    /// `SCDynamicStore` APIs. `Host.current().localizedName` is deprecated and
+    /// slated for removal from Foundation — avoid it on macOS 14+/26.
+    private static func computerName() -> String {
+        if let name = SCDynamicStoreCopyComputerName(nil, nil) as String? {
+            return name
+        }
+        return ProcessInfo.processInfo.hostName
+            .replacingOccurrences(of: ".local", with: "")
+    }
+
     init() {
-        container = try! LoomContainer(
-            for: LoomContainerConfiguration(
-                serviceType: "_miragecontrol._tcp",
-                serviceName: Host.current().localizedName ?? "Mac",
-                deviceIDSuiteName: "MirageControlLoomStore"
+        let built: LoomContainer?
+        do {
+            built = try LoomContainer(
+                for: LoomContainerConfiguration(
+                    serviceType: "_miragecontrol._tcp",
+                    serviceName: Self.computerName(),
+                    deviceIDSuiteName: "MirageControlLoomStore"
+                )
             )
-        )
-        
+        } catch {
+            print("MirageControl: ❌ LoomContainer init failed: \(error)")
+            built = nil
+            fatalStartupError = error.localizedDescription
+        }
+        self.container = built
+
+        guard let container = built else { return }
         let context = container.mainContext
         
         // Wire up authorization manager to feed ControlReceiver
@@ -88,9 +113,22 @@ struct MacHostApp: App {
 
     var body: some Scene {
         MenuBarExtra("MirageControl", systemImage: "cursorarrow.rays") {
-            MacMenuBarView(receiver: daemon.receiver)
-                .loomContainer(daemon.container, autostart: false)
-                .environmentObject(DeviceAuthorizationManager.shared)
+            if let container = daemon.container {
+                MacMenuBarView(receiver: daemon.receiver)
+                    .loomContainer(container, autostart: false)
+                    .environmentObject(DeviceAuthorizationManager.shared)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("MirageControl failed to start")
+                        .font(.headline)
+                    Text(daemon.fatalStartupError ?? "Unknown error")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                .padding(16)
+                .frame(width: 280)
+            }
         }
         .menuBarExtraStyle(.window)
     }

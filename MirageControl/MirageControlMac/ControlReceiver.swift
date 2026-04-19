@@ -31,7 +31,13 @@ final class ControlReceiver {
 
     private func consumeMessages(from connectionHandle: LoomConnectionHandle) async {
         for await data in connectionHandle.messages {
-            guard let message = try? JSONDecoder().decode(ControlMessage.self, from: data) else {
+            let message: ControlMessage
+            do {
+                message = try JSONDecoder().decode(ControlMessage.self, from: data)
+            } catch {
+                #if DEBUG
+                print("MirageControl: ⚠️ Failed to decode ControlMessage (\(data.count)B): \(error)")
+                #endif
                 continue
             }
             await dispatch(message, handle: connectionHandle)
@@ -58,6 +64,14 @@ final class ControlReceiver {
         case let .launchApp(bundleID):
             await launcher.launch(bundleID: bundleID)
 
+        case let .appShortcut(bundleID, keys):
+            // Activate the target app, wait for it to become frontmost, then
+            // inject. The wait is short (≤600 ms) but prevents the shortcut
+            // from landing in whichever app happened to be focused when the
+            // user tapped.
+            await launcher.activateAndWait(bundleID: bundleID)
+            injector.sendShortcut(keys: keys)
+
         case let .macroButton(id):
             await dispatchMacro(id: id)
             
@@ -75,73 +89,47 @@ final class ControlReceiver {
         case .requestAppList:
             await handleAppListRequest(handle: handle)
 
+        case let .requestAppMenuShortcuts(bundleID):
+            await handleMenuShortcutsRequest(bundleID: bundleID, handle: handle)
+
         case .authorizationStatus:
             break
-        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse:
+        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse:
             // Client-bound messages; host doesn't process them locally
             break
         }
     }
-    
+
     // MARK: - Screenshot Permission
 
     /// Call once at startup so macOS has already shown the prompt before the user
-    /// taps the screenshot button on their iPad.
+    /// taps the screenshot button on their iPad. Touches `SCShareableContent` to
+    /// surface the TCC dialog on first launch.
     func requestScreenCaptureIfNeeded() {
-        if #available(macOS 11.0, *) {
-            if !CGPreflightScreenCaptureAccess() {
-                CGRequestScreenCaptureAccess()
-            }
-        }
+        Task { await ScreenCaptureService.shared.primePermission() }
     }
 
     // MARK: - Screenshot Capture
 
-    /// Validates permission, captures the display on a background thread, compresses
-    /// and sends the JPEG back; or sends a descriptive `screenshotError` so the iPad
-    /// can dismiss its spinner and show a useful message.
+    /// Captures the main display via ScreenCaptureKit and sends the JPEG back,
+    /// or sends a descriptive `screenshotError` so the iPad can dismiss its
+    /// spinner and show a useful message.
     private func handleScreenshotRequest(handle: LoomConnectionHandle) async {
-        // 1. Check permission — macOS 11+ only
-        if #available(macOS 11.0, *) {
-            guard CGPreflightScreenCaptureAccess() else {
-                // Trigger the system prompt so it appears on next tap (no-op if already denied)
-                CGRequestScreenCaptureAccess()
-                await sendError(to: handle,
-                                message: "Screen Recording permission required. Please allow MirageControl in System Settings > Privacy & Security > Screen Recording, then try again.")
-                return
-            }
-        }
-
-        // 2. Capture the raw CGImage on the main thread (CGDisplayCreateImage is cheap)
-        guard let cgImage = CGDisplayCreateImage(CGMainDisplayID()) else {
+        do {
+            let jpeg = try await ScreenCaptureService.shared.captureMainDisplayJPEG()
+            try await handle.send(JSONEncoder().encode(ControlMessage.screenshotData(data: jpeg)))
+        } catch ScreenCaptureService.CaptureError.permissionDenied {
+            await sendError(to: handle,
+                            message: "Screen Recording permission required. Please allow MirageControl in System Settings > Privacy & Security > Screen Recording, then try again.")
+        } catch ScreenCaptureService.CaptureError.noDisplay {
             await sendError(to: handle, message: "Display capture failed. No displays found.")
-            return
-        }
-
-        // 3. Resize + JPEG compress on a background thread so we never block the main actor
-        let jpegData: Data? = await Task.detached(priority: .userInitiated) {
-            let targetWidth = min(CGFloat(cgImage.width), 1920)
-            let ratio = targetWidth / CGFloat(cgImage.width)
-            let targetSize = NSSize(width: targetWidth, height: CGFloat(cgImage.height) * ratio)
-
-            let resized = NSImage(size: targetSize)
-            resized.lockFocus()
-            NSGraphicsContext.current?.imageInterpolation = .high
-            NSBitmapImageRep(cgImage: cgImage).draw(in: NSRect(origin: .zero, size: targetSize))
-            resized.unlockFocus()
-
-            guard let tiff = resized.tiffRepresentation,
-                  let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-            return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.75])
-        }.value
-
-        guard let data = jpegData else {
+        } catch ScreenCaptureService.CaptureError.captureFailed(let detail) {
+            await sendError(to: handle, message: "Capture failed: \(detail)")
+        } catch ScreenCaptureService.CaptureError.encodeFailed {
             await sendError(to: handle, message: "Image compression failed.")
-            return
+        } catch {
+            await sendError(to: handle, message: "Unexpected capture error: \(error.localizedDescription)")
         }
-
-        // 4. Send the screenshot data back to the iPad
-        try? await handle.send(try JSONEncoder().encode(ControlMessage.screenshotData(data: data)))
     }
 
     private func sendError(to handle: LoomConnectionHandle, message: String) async {
@@ -197,6 +185,12 @@ final class ControlReceiver {
     private func handleAppListRequest(handle: LoomConnectionHandle) async {
         let apps = InstalledAppScanner.shared.installedApps()
         let message = ControlMessage.appListResponse(apps: apps)
+        try? await handle.send(try JSONEncoder().encode(message))
+    }
+
+    private func handleMenuShortcutsRequest(bundleID: String, handle: LoomConnectionHandle) async {
+        let shortcuts = await MenuShortcutDiscovery.discover(bundleID: bundleID, launcher: launcher)
+        let message = ControlMessage.appMenuShortcutsResponse(bundleID: bundleID, shortcuts: shortcuts)
         try? await handle.send(try JSONEncoder().encode(message))
     }
 
