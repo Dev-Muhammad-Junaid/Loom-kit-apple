@@ -21,10 +21,12 @@ final class ControlReceiver {
         let taskKey = UUID()
         connectionTasks[taskKey] = Task { [weak self] in
             await ActiveAppMonitor.shared.addConnection(connectionHandle, id: taskKey)
+            await RunningAppMonitor.shared.addConnection(connectionHandle, id: taskKey)
             await self?.consumeMessages(from: connectionHandle)
             _ = await MainActor.run { [weak self] in
                 self?.connectionTasks.removeValue(forKey: taskKey)
                 ActiveAppMonitor.shared.removeConnection(id: taskKey)
+                RunningAppMonitor.shared.removeConnection(id: taskKey)
             }
         }
     }
@@ -94,7 +96,7 @@ final class ControlReceiver {
 
         case .authorizationStatus:
             break
-        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse:
+        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse, .runningAppsUpdate:
             // Client-bound messages; host doesn't process them locally
             break
         }
@@ -198,5 +200,6 @@ final class ControlReceiver {
         connectionTasks[id]?.cancel()
         connectionTasks.removeValue(forKey: id)
         ActiveAppMonitor.shared.removeConnection(id: id)
+        RunningAppMonitor.shared.removeConnection(id: id)
     }
 }

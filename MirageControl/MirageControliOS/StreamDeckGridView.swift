@@ -16,6 +16,9 @@ struct StreamDeckGridView: View {
     /// Rendered as a colored selection ring on the matching tile; tapping
     /// that tile opens the shortcuts sheet directly (no relaunch).
     let activeBundleID: String?
+    /// Running apps in Cmd+Tab order (most-recently-activated first), pushed
+    /// by the Mac. Powers the app-switcher chevron inside the Quick Actions bar.
+    let runningBundleIDs: [String]
 
     // Persisted user preferences
     @AppStorage("pinnedBundleIDs") private var pinnedData: Data = Data()
@@ -25,16 +28,6 @@ struct StreamDeckGridView: View {
     @State private var hiddenIDs: Set<String> = []
     @State private var searchText: String = ""
     @State private var sheetApp: InstalledAppInfo?
-
-    // Static shortcuts & media
-    private let shortcuts: [MacroItem] = [
-         .shortcut(.init(id: "missioncontrol_trigger", displayName: "Mission Control", sfSymbol: "square.grid.2x2",   keys: [])),
-        .shortcut(.init(id: "launchpad_trigger",      displayName: "Launchpad",       sfSymbol: "circle.grid.3x3",   keys: [])),
-        .shortcut(.init(id: "showdesktop",    displayName: "Show Desktop",    sfSymbol: "desktopcomputer",   keys: ["fn", "f11"])),
-        .media(.init(id: "prev",      displayName: "Previous",   sfSymbol: "backward.end.fill",  action: "prev")),
-        .media(.init(id: "playpause", displayName: "Play/Pause", sfSymbol: "playpause.fill",     action: "playpause")),
-        .media(.init(id: "next",      displayName: "Next",       sfSymbol: "forward.end.fill",   action: "next")),
-    ]
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -77,28 +70,20 @@ struct StreamDeckGridView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 8)
 
-                // ── Quick Actions (shortcuts + media) ───────────
+                // ── Contextual Quick Actions bar ────────────────
+                // Replaces the old static 4-column grid. Morphs as the Mac's
+                // frontmost app changes, surfacing that app's top shortcuts
+                // inline alongside global macros and media transport.
                 if searchText.isEmpty {
                     SectionHeader(title: "QUICK ACTIONS")
-                    LazyVGrid(columns: columns, spacing: 24) {
-                        ForEach(shortcuts) { item in
-                            QuickActionButton(item: item, colorScheme: colorScheme) {
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                Task {
-                                    switch item {
-                                    case .media(let m):
-                                        await sender.sendMediaAction(m.action)
-                                    case .shortcut(let s) where s.keys.isEmpty:
-                                        // Macro trigger (Mission Control, Launchpad, etc.)
-                                        await sender.sendMacro(item.id)
-                                    default:
-                                        await sender.sendMacro(item.id)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
+                    QuickActionsBar(
+                        sender: sender,
+                        colorScheme: colorScheme,
+                        installedApps: installedApps,
+                        activeBundleID: activeBundleID,
+                        runningBundleIDs: runningBundleIDs,
+                        onOpenAppSheet: { sheetApp = $0 }
+                    )
                     .padding(.bottom, 20)
                 }
 
@@ -305,47 +290,3 @@ private struct AppButton: View {
     }
 }
 
-// MARK: - Quick Action Button (shortcuts + media)
-
-private struct QuickActionButton: View {
-    let item: MacroItem
-    let colorScheme: ColorScheme
-    let action: () -> Void
-
-    @State private var isPressed = false
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: item.sfSymbol)
-                    .font(.system(size: 28, weight: .thin))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(iconColor)
-                    .frame(width: 48, height: 48)
-
-                Text(item.displayName)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity)
-            .scaleEffect(isPressed ? 0.88 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isPressed)
-        }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded   { _ in isPressed = false }
-        )
-    }
-
-    private var iconColor: Color {
-        switch item {
-        case .shortcut: MirageTheme.violetSoft
-        case .media:    Color.primary.opacity(0.8)
-        case .app:      MirageTheme.violet
-        }
-    }
-}

@@ -26,6 +26,9 @@ struct ControlView: View {
     @State private var activeAppName: String?
     @State private var activeBundleID: String?
     @State private var installedApps: [InstalledAppInfo] = []
+    /// Bundle IDs of apps currently running on the Mac, in Cmd+Tab order
+    /// (most-recently-activated first). Pushed by `RunningAppMonitor`.
+    @State private var runningBundleIDs: [String] = []
     @State private var screenshotImage: UIImage?
     @State private var isRequestingScreenshot = false   // in-flight guard
     @State private var isScreenshotPresented = false
@@ -66,7 +69,8 @@ struct ControlView: View {
                                 sender: sender,
                                 colorScheme: colorScheme,
                                 installedApps: installedApps,
-                                activeBundleID: activeBundleID
+                                activeBundleID: activeBundleID,
+                                runningBundleIDs: runningBundleIDs
                             )
                         }
                     }
@@ -187,6 +191,11 @@ struct ControlView: View {
                     }
                     // Cache to disk for instant display on next connect
                     Self.cacheAppList(apps)
+
+                case let .runningAppsUpdate(ids):
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        runningBundleIDs = ids
+                    }
 
                 case let .appMenuShortcutsResponse(bundleID, shortcuts):
                     let added = ShortcutStore.shared.importBindings(shortcuts, for: bundleID)

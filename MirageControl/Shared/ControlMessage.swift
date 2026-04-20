@@ -41,10 +41,16 @@ public enum ControlMessage: Codable, Sendable {
     /// wasn't running or had no menu shortcuts we could read.
     case appMenuShortcutsResponse(bundleID: String, shortcuts: [AppShortcutBinding])
 
+    /// Mac → iPad: all currently running user-facing apps, ordered by most-
+    /// recent activation (Cmd+Tab order). Sent unsolicited on connection and
+    /// on every launch / terminate / activate. iPad maps bundle IDs to icons
+    /// from its existing `installedApps` cache — no icon payload needed.
+    case runningAppsUpdate(bundleIDs: [String])
+
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, id, status, action, data, name, message, apps, shortcuts
+        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts
     }
 
     private enum MessageType: String, Codable {
@@ -54,6 +60,7 @@ public enum ControlMessage: Codable, Sendable {
         case requestAppList, appListResponse
         case appShortcut
         case requestAppMenuShortcuts, appMenuShortcutsResponse
+        case runningAppsUpdate
     }
 
     public init(from decoder: Decoder) throws {
@@ -106,6 +113,10 @@ public enum ControlMessage: Codable, Sendable {
             self = .appMenuShortcutsResponse(
                 bundleID: try c.decode(String.self, forKey: .bundleID),
                 shortcuts: try c.decode([AppShortcutBinding].self, forKey: .shortcuts)
+            )
+        case .runningAppsUpdate:
+            self = .runningAppsUpdate(
+                bundleIDs: try c.decode([String].self, forKey: .bundleIDs)
             )
         }
     }
@@ -168,6 +179,9 @@ public enum ControlMessage: Codable, Sendable {
             try c.encode(MessageType.appMenuShortcutsResponse, forKey: .type)
             try c.encode(bundleID, forKey: .bundleID)
             try c.encode(shortcuts, forKey: .shortcuts)
+        case let .runningAppsUpdate(bundleIDs):
+            try c.encode(MessageType.runningAppsUpdate, forKey: .type)
+            try c.encode(bundleIDs, forKey: .bundleIDs)
         }
     }
 }
