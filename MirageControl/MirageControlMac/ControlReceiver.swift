@@ -22,11 +22,13 @@ final class ControlReceiver {
         connectionTasks[taskKey] = Task { [weak self] in
             await ActiveAppMonitor.shared.addConnection(connectionHandle, id: taskKey)
             await RunningAppMonitor.shared.addConnection(connectionHandle, id: taskKey)
+            await ContextObserver.shared.addConnection(connectionHandle, id: taskKey)
             await self?.consumeMessages(from: connectionHandle)
             _ = await MainActor.run { [weak self] in
                 self?.connectionTasks.removeValue(forKey: taskKey)
                 ActiveAppMonitor.shared.removeConnection(id: taskKey)
                 RunningAppMonitor.shared.removeConnection(id: taskKey)
+                ContextObserver.shared.removeConnection(id: taskKey)
             }
         }
     }
@@ -94,9 +96,12 @@ final class ControlReceiver {
         case let .requestAppMenuShortcuts(bundleID):
             await handleMenuShortcutsRequest(bundleID: bundleID, handle: handle)
 
+        case let .triggerContextAction(id):
+            ContextObserver.shared.performAction(id: id)
+
         case .authorizationStatus:
             break
-        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse, .runningAppsUpdate:
+        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse, .runningAppsUpdate, .uiContextUpdate:
             // Client-bound messages; host doesn't process them locally
             break
         }
@@ -201,5 +206,6 @@ final class ControlReceiver {
         connectionTasks.removeValue(forKey: id)
         ActiveAppMonitor.shared.removeConnection(id: id)
         RunningAppMonitor.shared.removeConnection(id: id)
+        ContextObserver.shared.removeConnection(id: id)
     }
 }

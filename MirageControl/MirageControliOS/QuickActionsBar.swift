@@ -28,6 +28,10 @@ struct QuickActionsBar: View {
     /// Running apps on the Mac in Cmd+Tab order (most-recently-activated
     /// first). Drives the app-switcher menu next to the app pill.
     let runningBundleIDs: [String]
+    /// AX-derived snapshot of what's currently interactable on the Mac.
+    /// When this carries a `.dialog(...)`, the middle segment swaps from
+    /// per-app shortcut chips to the dialog's buttons.
+    let uiContext: UIContextSnapshot
     /// Invoked when the user taps the app pill, or the "Add shortcuts" CTA
     /// in the empty middle segment. Parent is responsible for presenting
     /// `AppShortcutsSheet`.
@@ -116,6 +120,26 @@ struct QuickActionsBar: View {
 
     @ViewBuilder
     private var contextualSegment: some View {
+        switch uiContext {
+        case .dialog(let ctx):
+            dialogChips(ctx)
+                .id("dialog-\(ctx.revision)")
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .opacity
+                ))
+        case .none:
+            shortcutChips
+                .id("ctx-\(activeBundleID ?? "none")")
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .opacity
+                ))
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutChips: some View {
         HStack(spacing: 8) {
             if contextualBindings.isEmpty {
                 if let app = activeApp {
@@ -142,11 +166,21 @@ struct QuickActionsBar: View {
                 }
             }
         }
-        .id("ctx-\(activeBundleID ?? "none")")
-        .transition(.asymmetric(
-            insertion: .move(edge: .trailing).combined(with: .opacity),
-            removal: .opacity
-        ))
+    }
+
+    @ViewBuilder
+    private func dialogChips(_ ctx: DialogContext) -> some View {
+        HStack(spacing: 8) {
+            DialogLabel(title: ctx.title, message: ctx.message, colorScheme: colorScheme)
+            ForEach(ctx.buttons) { button in
+                DialogButtonChip(button: button, colorScheme: colorScheme) {
+                    UIImpactFeedbackGenerator(
+                        style: button.isDefault ? .medium : .light
+                    ).impactOccurred()
+                    Task { await sender.sendContextAction(id: button.id) }
+                }
+            }
+        }
     }
 
     private var globalSegment: some View {
@@ -354,6 +388,108 @@ private struct PlaceholderChip: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Dialog Label
+
+/// Small caption shown to the left of dialog buttons, identifying what the
+/// buttons act on. Shows title if AX exposed one, otherwise the body
+/// message truncated. Hidden entirely when neither is available (common for
+/// anonymous system alerts).
+private struct DialogLabel: View {
+    let title: String?
+    let message: String?
+    let colorScheme: ColorScheme
+
+    private var primary: String {
+        if let t = title, !t.isEmpty { return t }
+        if let m = message, !m.isEmpty { return m }
+        // Many system alerts don't expose a window title through AX — keep
+        // a neutral caption so the user still sees that a dialog is active.
+        return "Dialog"
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.bubble")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.secondary)
+            Text(primary)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.primary.opacity(0.85))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: 200)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(MirageTheme.subtleWellFill(colorScheme).opacity(0.6))
+        )
+    }
+}
+
+// MARK: - Dialog Button Chip
+
+private struct DialogButtonChip: View {
+    let button: DialogButton
+    let colorScheme: ColorScheme
+    let onTap: () -> Void
+
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 5) {
+                Text(button.title)
+                    .font(.system(size: 12, weight: button.isDefault ? .semibold : .medium, design: .rounded))
+                    .foregroundStyle(foreground)
+                    .lineLimit(1)
+                if button.isDefault {
+                    Text("⏎")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(foreground.opacity(0.7))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(background)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(stroke, lineWidth: 1)
+                    )
+            )
+            .scaleEffect(isPressed ? 0.93 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isPressed)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded   { _ in isPressed = false }
+        )
+    }
+
+    private var foreground: Color {
+        if button.isDefault { return .white }
+        if button.isCancel  { return Color.secondary }
+        return Color.primary
+    }
+
+    private var background: Color {
+        if button.isDefault { return MirageTheme.violet }
+        if button.isCancel  { return Color.clear }
+        return MirageTheme.subtleWellFill(colorScheme)
+    }
+
+    private var stroke: Color {
+        if button.isDefault { return MirageTheme.violet.opacity(0.8) }
+        if button.isCancel  { return Color.primary.opacity(0.14) }
+        return Color.primary.opacity(0.08)
     }
 }
 

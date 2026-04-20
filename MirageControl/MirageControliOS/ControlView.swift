@@ -29,6 +29,11 @@ struct ControlView: View {
     /// Bundle IDs of apps currently running on the Mac, in Cmd+Tab order
     /// (most-recently-activated first). Pushed by `RunningAppMonitor`.
     @State private var runningBundleIDs: [String] = []
+    /// Latest accessibility-derived context snapshot from the Mac. When a
+    /// modal dialog is visible on the frontmost app this carries its
+    /// buttons; the Quick Actions bar swaps its contextual segment to
+    /// surface them.
+    @State private var uiContext: UIContextSnapshot = .none
     @State private var screenshotImage: UIImage?
     @State private var isRequestingScreenshot = false   // in-flight guard
     @State private var isScreenshotPresented = false
@@ -70,7 +75,8 @@ struct ControlView: View {
                                 colorScheme: colorScheme,
                                 installedApps: installedApps,
                                 activeBundleID: activeBundleID,
-                                runningBundleIDs: runningBundleIDs
+                                runningBundleIDs: runningBundleIDs,
+                                uiContext: uiContext
                             )
                         }
                     }
@@ -139,6 +145,22 @@ struct ControlView: View {
         }
     }
 
+    #if DEBUG
+    private func messageTypeName(_ m: ControlMessage) -> String {
+        switch m {
+        case .authorizationStatus: "authorizationStatus"
+        case .activeAppUpdate: "activeAppUpdate"
+        case .screenshotData: "screenshotData"
+        case .screenshotError: "screenshotError"
+        case .appListResponse: "appListResponse"
+        case .appMenuShortcutsResponse: "appMenuShortcutsResponse"
+        case .runningAppsUpdate: "runningAppsUpdate"
+        case .uiContextUpdate: "uiContextUpdate"
+        default: "other"
+        }
+    }
+    #endif
+
     // MARK: - Single Message Listener
     //
     // All messages from the Mac come through here. Splitting this loop
@@ -156,6 +178,9 @@ struct ControlView: View {
                 #endif
                 continue
             }
+            #if DEBUG
+            print("MirageControliOS: 📥 \(data.count)B \(messageTypeName(message))")
+            #endif
             await MainActor.run {
                 switch message {
                 case let .authorizationStatus(status):
@@ -195,6 +220,19 @@ struct ControlView: View {
                 case let .runningAppsUpdate(ids):
                     withAnimation(.easeInOut(duration: 0.2)) {
                         runningBundleIDs = ids
+                    }
+
+                case let .uiContextUpdate(snapshot):
+                    #if DEBUG
+                    switch snapshot {
+                    case .none:
+                        print("MirageControliOS: 📥 uiContextUpdate .none")
+                    case .dialog(let ctx):
+                        print("MirageControliOS: 📥 uiContextUpdate dialog title='\(ctx.title ?? "")' buttons=\(ctx.buttons.map(\.title))")
+                    }
+                    #endif
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                        uiContext = snapshot
                     }
 
                 case let .appMenuShortcutsResponse(bundleID, shortcuts):

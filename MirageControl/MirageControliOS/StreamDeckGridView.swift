@@ -19,6 +19,10 @@ struct StreamDeckGridView: View {
     /// Running apps in Cmd+Tab order (most-recently-activated first), pushed
     /// by the Mac. Powers the app-switcher chevron inside the Quick Actions bar.
     let runningBundleIDs: [String]
+    /// Latest AX-derived UI context (dialog buttons, etc.) from the Mac.
+    /// When a dialog is active, the Quick Actions bar swaps its contextual
+    /// segment to surface the dialog's buttons instead of app shortcuts.
+    let uiContext: UIContextSnapshot
 
     // Persisted user preferences
     @AppStorage("pinnedBundleIDs") private var pinnedData: Data = Data()
@@ -82,6 +86,7 @@ struct StreamDeckGridView: View {
                         installedApps: installedApps,
                         activeBundleID: activeBundleID,
                         runningBundleIDs: runningBundleIDs,
+                        uiContext: uiContext,
                         onOpenAppSheet: { sheetApp = $0 }
                     )
                     .padding(.bottom, 20)

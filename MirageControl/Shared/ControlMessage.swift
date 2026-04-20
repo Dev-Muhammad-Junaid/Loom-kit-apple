@@ -47,10 +47,23 @@ public enum ControlMessage: Codable, Sendable {
     /// from its existing `installedApps` cache — no icon payload needed.
     case runningAppsUpdate(bundleIDs: [String])
 
+    /// Mac → iPad: what's currently interactable on the frontmost app, as
+    /// seen through Accessibility. Phase 1 carries dialog/sheet button
+    /// snapshots so the iPad can surface "Cancel / Don't Save / Save"
+    /// chips in the Quick Actions bar. `.none` means fall back to regular
+    /// per-app shortcut chips.
+    case uiContextUpdate(snapshot: UIContextSnapshot)
+
+    /// iPad → Mac: the user tapped a dialog button. `id` is an opaque
+    /// handle from the most recent `uiContextUpdate` snapshot; the Mac
+    /// looks up its stored AX element reference and performs `kAXPressAction`.
+    /// Stale IDs (after the snapshot has been superseded) are ignored.
+    case triggerContextAction(id: String)
+
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts
+        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot
     }
 
     private enum MessageType: String, Codable {
@@ -61,6 +74,7 @@ public enum ControlMessage: Codable, Sendable {
         case appShortcut
         case requestAppMenuShortcuts, appMenuShortcutsResponse
         case runningAppsUpdate
+        case uiContextUpdate, triggerContextAction
     }
 
     public init(from decoder: Decoder) throws {
@@ -118,6 +132,12 @@ public enum ControlMessage: Codable, Sendable {
             self = .runningAppsUpdate(
                 bundleIDs: try c.decode([String].self, forKey: .bundleIDs)
             )
+        case .uiContextUpdate:
+            self = .uiContextUpdate(
+                snapshot: try c.decode(UIContextSnapshot.self, forKey: .snapshot)
+            )
+        case .triggerContextAction:
+            self = .triggerContextAction(id: try c.decode(String.self, forKey: .id))
         }
     }
 
@@ -182,6 +202,12 @@ public enum ControlMessage: Codable, Sendable {
         case let .runningAppsUpdate(bundleIDs):
             try c.encode(MessageType.runningAppsUpdate, forKey: .type)
             try c.encode(bundleIDs, forKey: .bundleIDs)
+        case let .uiContextUpdate(snapshot):
+            try c.encode(MessageType.uiContextUpdate, forKey: .type)
+            try c.encode(snapshot, forKey: .snapshot)
+        case let .triggerContextAction(id):
+            try c.encode(MessageType.triggerContextAction, forKey: .type)
+            try c.encode(id, forKey: .id)
         }
     }
 }

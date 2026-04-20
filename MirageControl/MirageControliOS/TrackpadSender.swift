@@ -147,6 +147,13 @@ actor TrackpadSender {
         await send(.mediaCommand(action: action))
     }
 
+    /// Tells the Mac to press the dialog button identified by `id` from the
+    /// latest `uiContextUpdate` snapshot. If the snapshot has since been
+    /// superseded the Mac silently ignores it.
+    func sendContextAction(id: String) async {
+        await send(.triggerContextAction(id: id))
+    }
+
     func requestScreenshot() async {
         await send(.requestScreenshot)
     }
