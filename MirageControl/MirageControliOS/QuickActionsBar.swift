@@ -65,6 +65,42 @@ struct QuickActionsBar: View {
     }
 
     var body: some View {
+        Group {
+            if case .dialog(let ctx) = uiContext {
+                // Takeover layout — mirrors how Apple's Touch Bar went
+                // "all-hands" for NSAlerts: static macros/media hide so
+                // the dialog's message + buttons get the full width.
+                dialogTakeoverBar(ctx)
+                    .id("takeover-\(ctx.revision)")
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .center)),
+                        removal: .opacity
+                    ))
+            } else {
+                normalBar
+                    .transition(.opacity)
+            }
+        }
+        .frame(height: 64)
+        .background(barBackground)
+        .clipShape(RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
+                .strokeBorder(MirageTheme.tabContainerBorder(colorScheme), lineWidth: 1)
+        )
+        .padding(.horizontal, 20)
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: activeBundleID)
+        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: isDialogActive)
+    }
+
+    /// `true` while the Mac is reporting an active modal dialog/sheet. Drives
+    /// the full-width takeover layout.
+    private var isDialogActive: Bool {
+        if case .dialog = uiContext { return true }
+        return false
+    }
+
+    private var normalBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
                 appContextSegment
@@ -78,15 +114,28 @@ struct QuickActionsBar: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
         }
-        .frame(height: 64)
-        .background(barBackground)
-        .clipShape(RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
-                .strokeBorder(MirageTheme.tabContainerBorder(colorScheme), lineWidth: 1)
-        )
-        .padding(.horizontal, 20)
-        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: activeBundleID)
+    }
+
+    @ViewBuilder
+    private func dialogTakeoverBar(_ ctx: DialogContext) -> some View {
+        HStack(spacing: 12) {
+            appContextSegment
+            segmentDivider
+            DialogCaption(title: ctx.title, message: ctx.message, colorScheme: colorScheme)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                ForEach(ctx.buttons) { button in
+                    DialogButtonChip(button: button, colorScheme: colorScheme) {
+                        UIImpactFeedbackGenerator(
+                            style: button.isDefault ? .medium : .light
+                        ).impactOccurred()
+                        Task { await sender.sendContextAction(id: button.id) }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Segments
@@ -118,28 +167,10 @@ struct QuickActionsBar: View {
         }
     }
 
+    // The contextual middle segment is only used in the normal (non-dialog)
+    // layout — the takeover bar renders dialog content in its own path.
     @ViewBuilder
     private var contextualSegment: some View {
-        switch uiContext {
-        case .dialog(let ctx):
-            dialogChips(ctx)
-                .id("dialog-\(ctx.revision)")
-                .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
-                    removal: .opacity
-                ))
-        case .none:
-            shortcutChips
-                .id("ctx-\(activeBundleID ?? "none")")
-                .transition(.asymmetric(
-                    insertion: .move(edge: .trailing).combined(with: .opacity),
-                    removal: .opacity
-                ))
-        }
-    }
-
-    @ViewBuilder
-    private var shortcutChips: some View {
         HStack(spacing: 8) {
             if contextualBindings.isEmpty {
                 if let app = activeApp {
@@ -166,21 +197,11 @@ struct QuickActionsBar: View {
                 }
             }
         }
-    }
-
-    @ViewBuilder
-    private func dialogChips(_ ctx: DialogContext) -> some View {
-        HStack(spacing: 8) {
-            DialogLabel(title: ctx.title, message: ctx.message, colorScheme: colorScheme)
-            ForEach(ctx.buttons) { button in
-                DialogButtonChip(button: button, colorScheme: colorScheme) {
-                    UIImpactFeedbackGenerator(
-                        style: button.isDefault ? .medium : .light
-                    ).impactOccurred()
-                    Task { await sender.sendContextAction(id: button.id) }
-                }
-            }
-        }
+        .id("ctx-\(activeBundleID ?? "none")")
+        .transition(.asymmetric(
+            insertion: .move(edge: .trailing).combined(with: .opacity),
+            removal: .opacity
+        ))
     }
 
     private var globalSegment: some View {
@@ -391,43 +412,54 @@ private struct PlaceholderChip: View {
     }
 }
 
-// MARK: - Dialog Label
+// MARK: - Dialog Caption
 
-/// Small caption shown to the left of dialog buttons, identifying what the
-/// buttons act on. Shows title if AX exposed one, otherwise the body
-/// message truncated. Hidden entirely when neither is available (common for
-/// anonymous system alerts).
-private struct DialogLabel: View {
+/// Flowing caption used inside the takeover bar. Message gets up to two
+/// lines of real estate (the bar hides the macros/media segments while
+/// a dialog is up, so there's ample horizontal room even on iPhone).
+/// When AX gave us both a title and a message, the title renders as a
+/// tiny uppercase eyebrow above the message — classic NSAlert shape.
+private struct DialogCaption: View {
     let title: String?
     let message: String?
     let colorScheme: ColorScheme
 
-    private var primary: String {
-        if let t = title, !t.isEmpty { return t }
+    private var primaryText: String {
         if let m = message, !m.isEmpty { return m }
-        // Many system alerts don't expose a window title through AX — keep
-        // a neutral caption so the user still sees that a dialog is active.
-        return "Dialog"
+        if let t = title, !t.isEmpty { return t }
+        return "Confirm action"
+    }
+
+    private var eyebrow: String? {
+        // Only show the eyebrow when we have BOTH a title and a distinct
+        // message — otherwise the eyebrow would echo the primary text.
+        guard let t = title, !t.isEmpty,
+              let m = message, !m.isEmpty, t != m else { return nil }
+        return t.uppercased()
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.bubble")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.secondary)
-            Text(primary)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.primary.opacity(0.85))
-                .lineLimit(1)
-                .truncationMode(.tail)
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.bubble.fill")
+                .font(.system(size: 13, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(MirageTheme.violet)
+            VStack(alignment: .leading, spacing: 1) {
+                if let eyebrow {
+                    Text(eyebrow)
+                        .font(.system(size: 8, weight: .semibold, design: .rounded))
+                        .tracking(0.6)
+                        .foregroundStyle(Color.secondary.opacity(0.8))
+                        .lineLimit(1)
+                }
+                Text(primaryText)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.primary.opacity(0.92))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .frame(maxWidth: 200)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(MirageTheme.subtleWellFill(colorScheme).opacity(0.6))
-        )
     }
 }
 

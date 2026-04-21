@@ -393,12 +393,24 @@ final class ContextObserver {
         } else if focusedSubrole == "AXDialog" || focusedSubrole == "AXSystemDialog" {
             dialogRoot = focused
             source = "focused-subrole=\(focusedSubrole)"
+        } else if isModal(focused) {
+            dialogRoot = focused
+            source = "focused-AXModal"
+        } else if let groupDialog = firstChild(
+                    ofGroupWithDialogSubrole: focused, depth: 0, limit: 4
+                  ) {
+            // Some SwiftUI apps (System Settings is a notable culprit)
+            // hoist their alert/confirm content into an `AXGroup` with
+            // subrole `AXDialog` rather than a real `AXSheet` window.
+            dialogRoot = groupDialog
+            source = "child-group-dialog"
         } else if let modalWindow = firstModalWindow(in: app) {
             dialogRoot = modalWindow
             source = "top-level-dialog"
         } else {
             #if DEBUG
-            print("MirageControl: ContextObserver no dialog found (focused role=\(focusedRole) subrole=\(focusedSubrole))")
+            let childSummary = summarizeChildren(of: focused, depth: 1, limit: 8)
+            print("MirageControl: ContextObserver no dialog found | focused role=\(focusedRole) subrole=\(focusedSubrole) | children: \(childSummary)")
             #endif
             store([:])
             return .none
@@ -493,6 +505,63 @@ final class ContextObserver {
         return nil
     }
 
+    /// Looks for an `AXGroup` with subrole `AXDialog` / `AXSystemDialog`
+    /// anywhere within a bounded subtree. System Settings and several
+    /// SwiftUI-on-AppKit apps use this pattern for confirmation prompts.
+    private static func firstChild(
+        ofGroupWithDialogSubrole element: AXUIElement,
+        depth: Int,
+        limit: Int
+    ) -> AXUIElement? {
+        guard depth < limit else { return nil }
+        guard let children: [AXUIElement] = copyAttribute(element, kAXChildrenAttribute) else {
+            return nil
+        }
+        for child in children {
+            let role: String = copyAttribute(child, kAXRoleAttribute) ?? ""
+            let subrole: String = copyAttribute(child, kAXSubroleAttribute) ?? ""
+            if role == (kAXGroupRole as String),
+               subrole == "AXDialog" || subrole == "AXSystemDialog" {
+                return child
+            }
+            if let nested = firstChild(
+                ofGroupWithDialogSubrole: child, depth: depth + 1, limit: limit
+            ) {
+                return nested
+            }
+        }
+        return nil
+    }
+
+    /// Reads `kAXModalAttribute` on a window. SwiftUI sheets frequently set
+    /// this even when they don't adopt the `AXSheet` role or dialog subrole.
+    private static func isModal(_ element: AXUIElement) -> Bool {
+        let raw: NSNumber? = copyAttribute(element, "AXModal")
+        return raw?.boolValue ?? false
+    }
+
+    #if DEBUG
+    /// One-line summary of a focused window's immediate (or near-immediate)
+    /// children — used when we can't find a dialog so the log tells us what
+    /// the app's structure actually looks like in AX terms.
+    private static func summarizeChildren(
+        of element: AXUIElement,
+        depth: Int,
+        limit: Int
+    ) -> String {
+        guard let children: [AXUIElement] = copyAttribute(element, kAXChildrenAttribute) else {
+            return "<none>"
+        }
+        var summary: [String] = []
+        for c in children.prefix(8) {
+            let role: String = copyAttribute(c, kAXRoleAttribute) ?? "?"
+            let subrole: String = copyAttribute(c, kAXSubroleAttribute) ?? "-"
+            summary.append("\(role)/\(subrole)")
+        }
+        return "[" + summary.joined(separator: ", ") + "]"
+    }
+    #endif
+
     /// Scans all top-level windows of an app for a modal surface — a
     /// sheet (role `AXSheet`) or dialog-subrole window (free-standing
     /// alert that doesn't own AX focus). Also digs one level into each
@@ -506,10 +575,16 @@ final class ContextObserver {
             if role == (kAXSheetRole as String) { return win }
             let subrole: String = copyAttribute(win, kAXSubroleAttribute) ?? ""
             if subrole == "AXDialog" || subrole == "AXSystemDialog" { return win }
+            if isModal(win) { return win }
             if let sheetChild = firstChild(
                 of: win, matchingRole: kAXSheetRole as String, depth: 0, limit: 2
             ) {
                 return sheetChild
+            }
+            if let groupDialog = firstChild(
+                ofGroupWithDialogSubrole: win, depth: 0, limit: 4
+            ) {
+                return groupDialog
             }
         }
         return nil
