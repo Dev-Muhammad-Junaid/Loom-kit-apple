@@ -300,6 +300,8 @@ final class ContextObserver {
             print("MirageControl: ContextObserver snapshot = .none")
         case .dialog(let ctx):
             print("MirageControl: ContextObserver snapshot = dialog '\(ctx.title ?? "?")' with \(ctx.buttons.count) button(s)")
+        case .textField(let ctx):
+            print("MirageControl: ContextObserver snapshot = textField kind=\(ctx.kind.rawValue)")
         }
         #endif
 
@@ -408,6 +410,23 @@ final class ContextObserver {
             dialogRoot = modalWindow
             source = "top-level-dialog"
         } else {
+            // No dialog found — check whether focus is on an editable
+            // text / numeric field. This powers the text-editing chip row.
+            if let focusedElem: AXUIElement = copyAttribute(app, kAXFocusedUIElementAttribute) {
+                if let kind = classifyField(focusedElem) {
+                    #if DEBUG
+                    print("MirageControl: ContextObserver focused field kind=\(kind.rawValue)")
+                    #endif
+                    store([:])
+                    return .textField(TextFieldContext(kind: kind))
+                }
+                #if DEBUG
+                let fRole: String = copyAttribute(focusedElem, kAXRoleAttribute) ?? "?"
+                let fSub:  String = copyAttribute(focusedElem, kAXSubroleAttribute) ?? "-"
+                print("MirageControl: ContextObserver focused element not a field | role=\(fRole) subrole=\(fSub)")
+                #endif
+            }
+
             #if DEBUG
             let childSummary = summarizeChildren(of: focused, depth: 1, limit: 8)
             print("MirageControl: ContextObserver no dialog found | focused role=\(focusedRole) subrole=\(focusedSubrole) | children: \(childSummary)")
@@ -538,6 +557,87 @@ final class ContextObserver {
     private static func isModal(_ element: AXUIElement) -> Bool {
         let raw: NSNumber? = copyAttribute(element, "AXModal")
         return raw?.boolValue ?? false
+    }
+
+    /// Inspects a focused element and decides whether it's an editable
+    /// text or numeric input we should surface edit-action chips for.
+    ///
+    /// Three strategies layered together:
+    ///   1. Direct role/subrole match (AppKit native controls).
+    ///   2. Duck-typing via `AXValue` settability (custom controls and
+    ///      apps that expose arbitrary roles but allow writing their
+    ///      value — catches many non-native editors).
+    ///   3. Focused-descendant walk (Chrome / Electron / SwiftUI commonly
+    ///      report a wrapping container as focused, with the real input
+    ///      nested a few levels deeper).
+    ///
+    /// Disabled elements (read-only, dimmed) are treated as "not a field"
+    /// so we don't surface chips that'll no-op.
+    private static func classifyField(_ elem: AXUIElement) -> TextFieldContext.Kind? {
+        let enabledRaw: NSNumber? = copyAttribute(elem, kAXEnabledAttribute)
+        if let e = enabledRaw, e.boolValue == false { return nil }
+
+        if let direct = directFieldKind(elem) { return direct }
+        if hasSettableStringValue(elem)       { return .text }
+        if let nested = findFocusedFieldDescendant(under: elem, depth: 0, limit: 6) {
+            return nested
+        }
+        return nil
+    }
+
+    /// Lookup the kind purely from role / subrole — fast, no tree walking.
+    private static func directFieldKind(_ elem: AXUIElement) -> TextFieldContext.Kind? {
+        let role: String = copyAttribute(elem, kAXRoleAttribute) ?? ""
+        let subrole: String = copyAttribute(elem, kAXSubroleAttribute) ?? ""
+        if subrole == "AXSecureTextField" { return .secure }
+        if subrole == "AXNumberStepper"   { return .numeric }
+        if role == (kAXIncrementorRole as String) { return .numeric }
+        if role == (kAXTextFieldRole as String)   { return .text }
+        if role == (kAXTextAreaRole as String)    { return .text }
+        if role == (kAXComboBoxRole as String)    { return .text }
+        if role == "AXSearchField"                { return .text }
+        return nil
+    }
+
+    /// `true` when `AXValue` on this element is a settable string — i.e.
+    /// the user can write text into it. Catches the many Electron / custom
+    /// controls that don't advertise themselves as `AXTextField`.
+    private static func hasSettableStringValue(_ elem: AXUIElement) -> Bool {
+        var settable: DarwinBoolean = false
+        let err = AXUIElementIsAttributeSettable(
+            elem, kAXValueAttribute as CFString, &settable
+        )
+        guard err == .success, settable.boolValue else { return false }
+        let value: String? = copyAttribute(elem, kAXValueAttribute)
+        return value != nil
+    }
+
+    /// Walks the focused branch of the AX tree under `element` looking for
+    /// a descendant that's both marked `AXFocused == true` and looks like
+    /// a text field. Bounded to `limit` levels and follows only focused
+    /// branches so it's cheap even on enormous web-content trees.
+    private static func findFocusedFieldDescendant(
+        under element: AXUIElement,
+        depth: Int,
+        limit: Int
+    ) -> TextFieldContext.Kind? {
+        guard depth < limit else { return nil }
+        guard let children: [AXUIElement] = copyAttribute(element, kAXChildrenAttribute) else {
+            return nil
+        }
+        for child in children {
+            let focused: NSNumber? = copyAttribute(child, kAXFocusedAttribute)
+            guard focused?.boolValue == true else { continue }
+
+            if let direct = directFieldKind(child) { return direct }
+            if hasSettableStringValue(child)       { return .text }
+            if let nested = findFocusedFieldDescendant(
+                under: child, depth: depth + 1, limit: limit
+            ) {
+                return nested
+            }
+        }
+        return nil
     }
 
     #if DEBUG

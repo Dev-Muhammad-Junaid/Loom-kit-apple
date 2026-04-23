@@ -229,6 +229,8 @@ struct ControlView: View {
                         print("MirageControliOS: 📥 uiContextUpdate .none")
                     case .dialog(let ctx):
                         print("MirageControliOS: 📥 uiContextUpdate dialog title='\(ctx.title ?? "")' buttons=\(ctx.buttons.map(\.title))")
+                    case .textField(let ctx):
+                        print("MirageControliOS: 📥 uiContextUpdate textField kind=\(ctx.kind.rawValue)")
                     }
                     #endif
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {

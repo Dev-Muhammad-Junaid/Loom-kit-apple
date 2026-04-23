@@ -21,6 +21,11 @@ public enum UIContextSnapshot: Codable, Hashable, Sendable {
     case none
     /// A modal dialog / sheet / alert is visible on the frontmost app.
     case dialog(DialogContext)
+    /// The user is focused on an editable text or numeric field on the
+    /// frontmost app. The iPad's Quick Actions bar swaps its middle
+    /// segment to show cut/copy/paste/undo/redo/select-all/delete/return,
+    /// plus numeric-stepper chips for spinner fields.
+    case textField(TextFieldContext)
 }
 
 public struct DialogContext: Codable, Hashable, Sendable {
@@ -43,6 +48,17 @@ public struct DialogContext: Codable, Hashable, Sendable {
         self.message = message
         self.buttons = buttons
     }
+}
+
+public struct TextFieldContext: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        case text       // plain text field, text area, search field, combo box
+        case numeric    // spinner / number stepper
+        case secure     // password field
+    }
+    public let kind: Kind
+
+    public init(kind: Kind) { self.kind = kind }
 }
 
 public struct DialogButton: Codable, Hashable, Sendable, Identifiable {

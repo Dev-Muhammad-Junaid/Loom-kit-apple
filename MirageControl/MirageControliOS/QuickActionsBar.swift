@@ -32,6 +32,12 @@ struct QuickActionsBar: View {
     /// When this carries a `.dialog(...)`, the middle segment swaps from
     /// per-app shortcut chips to the dialog's buttons.
     let uiContext: UIContextSnapshot
+    /// User-toggled override. When `true`, the edit chip row is shown
+    /// even if AX didn't detect a focused text field. Powers the
+    /// floating keyboard FAB so people can still reach Cut/Copy/Paste
+    /// in apps whose AX tree doesn't surface text-input focus (web
+    /// content, Electron apps, custom-drawn fields).
+    let manualEditMode: Bool
     /// Invoked when the user taps the app pill, or the "Add shortcuts" CTA
     /// in the empty middle segment. Parent is responsible for presenting
     /// `AppShortcutsSheet`.
@@ -51,7 +57,27 @@ struct QuickActionsBar: View {
 
     private var contextualBindings: [AppShortcutBinding] {
         guard let bundleID = activeBundleID else { return [] }
-        return Array(store.bindings(for: bundleID).prefix(maxContextualChips))
+        // Compress the per-app shortcut slot when a text field is also being
+        // surfaced — so a Chrome user keeps quick access to e.g. New Tab
+        // while also seeing Cut / Copy / Paste in the same row.
+        let cap = isTextFieldContext ? 3 : maxContextualChips
+        return Array(store.bindings(for: bundleID).prefix(cap))
+    }
+
+    /// True when the Mac has told us a text / numeric / secure field is
+    /// focused, or when the user has manually enabled edit mode via the
+    /// floating keyboard FAB. Governs the compression of app-shortcut
+    /// chips so the edit chips fit alongside them.
+    private var isTextFieldContext: Bool {
+        effectiveTextFieldKind != nil
+    }
+
+    /// The kind of edit-chip row to render. AX detection wins when present,
+    /// otherwise falls back to plain `.text` when manual mode is on.
+    private var effectiveTextFieldKind: TextFieldContext.Kind? {
+        if case .textField(let ctx) = uiContext { return ctx.kind }
+        if manualEditMode { return .text }
+        return nil
     }
 
     /// Running apps the user can switch to, excluding whichever one is already
@@ -118,11 +144,11 @@ struct QuickActionsBar: View {
 
     @ViewBuilder
     private func dialogTakeoverBar(_ ctx: DialogContext) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             appContextSegment
             segmentDivider
-            DialogCaption(title: ctx.title, message: ctx.message, colorScheme: colorScheme)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            DialogInfoButton(title: ctx.title, message: ctx.message, colorScheme: colorScheme)
+            Spacer(minLength: 0)
             HStack(spacing: 8) {
                 ForEach(ctx.buttons) { button in
                     DialogButtonChip(button: button, colorScheme: colorScheme) {
@@ -169,8 +195,44 @@ struct QuickActionsBar: View {
 
     // The contextual middle segment is only used in the normal (non-dialog)
     // layout — the takeover bar renders dialog content in its own path.
+    //
+    // Layout policy:
+    //   • App shortcuts are ALWAYS shown (up to `maxContextualChips`), even
+    //     when a text field is focused — just compressed to 3 so the row
+    //     stays reasonable. This is the "append, don't replace" rule that
+    //     lets users in Chrome / Cursor / Slack etc. keep flipping between
+    //     app commands and edit actions without losing either side.
+    //   • When AX surfaced a focused text/numeric/secure field, the edit
+    //     chips are appended after a thin divider.
     @ViewBuilder
     private var contextualSegment: some View {
+        HStack(spacing: 8) {
+            shortcutChipsSegment
+                .id("ctx-\(activeBundleID ?? "none")")
+
+            if let kind = effectiveTextFieldKind {
+                chipDivider
+                textFieldChips(kind)
+                    .id("textfield-\(kind.rawValue)-\(manualEditMode ? "manual" : "ax")")
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .opacity
+                    ))
+            }
+        }
+    }
+
+    /// Slim divider rendered inline between the app-shortcut chips and the
+    /// text-edit chips when both are present. Shorter than the main
+    /// segment divider so the appended section feels tied to the app row.
+    private var chipDivider: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.06))
+            .frame(width: 1, height: 24)
+    }
+
+    @ViewBuilder
+    private var shortcutChipsSegment: some View {
         HStack(spacing: 8) {
             if contextualBindings.isEmpty {
                 if let app = activeApp {
@@ -197,11 +259,20 @@ struct QuickActionsBar: View {
                 }
             }
         }
-        .id("ctx-\(activeBundleID ?? "none")")
-        .transition(.asymmetric(
-            insertion: .move(edge: .trailing).combined(with: .opacity),
-            removal: .opacity
-        ))
+    }
+
+    @ViewBuilder
+    private func textFieldChips(_ kind: TextFieldContext.Kind) -> some View {
+        HStack(spacing: 6) {
+            ForEach(TextFieldAction.actions(for: kind)) { action in
+                TextFieldChip(action: action, colorScheme: colorScheme) {
+                    UIImpactFeedbackGenerator(
+                        style: action.isPrimary ? .medium : .light
+                    ).impactOccurred()
+                    Task { await sender.sendShortcut(action.keys) }
+                }
+            }
+        }
     }
 
     private var globalSegment: some View {
@@ -412,54 +483,210 @@ private struct PlaceholderChip: View {
     }
 }
 
-// MARK: - Dialog Caption
+// MARK: - Keyboard FAB
 
-/// Flowing caption used inside the takeover bar. Message gets up to two
-/// lines of real estate (the bar hides the macros/media segments while
-/// a dialog is up, so there's ample horizontal room even on iPhone).
-/// When AX gave us both a title and a message, the title renders as a
-/// tiny uppercase eyebrow above the message — classic NSAlert shape.
-private struct DialogCaption: View {
+/// Floating circular toggle that force-enables the edit-chip row in the
+/// Quick Actions bar. Use when AX didn't surface a focused text field —
+/// common in Chromium / Electron apps and custom-drawn controls.
+/// Visibility is owned by the parent (StreamDeckGridView) which hides it
+/// when a dialog or AX-detected text field is already active.
+struct KeyboardFAB: View {
+    let isActive: Bool
+    let onTap: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                Circle()
+                    .fill(backgroundColor)
+                    .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
+                Circle()
+                    .strokeBorder(strokeColor, lineWidth: 1)
+                Image(systemName: "keyboard")
+                    .font(.system(size: 22, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isActive ? Color.white : Color.primary.opacity(0.85))
+            }
+            .frame(width: 54, height: 54)
+            .scaleEffect(isPressed ? 0.9 : 1.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.65), value: isPressed)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isActive)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded   { _ in isPressed = false }
+        )
+        .accessibilityLabel(isActive ? "Hide text edit actions" : "Show text edit actions")
+    }
+
+    private var backgroundColor: Color {
+        isActive ? MirageTheme.violet : MirageTheme.subtleWellFill(colorScheme)
+    }
+
+    private var strokeColor: Color {
+        isActive ? MirageTheme.violet.opacity(0.5) : Color.primary.opacity(0.12)
+    }
+}
+
+// MARK: - Text Field Actions
+
+/// One chip in the text/numeric editing row.
+private struct TextFieldAction: Identifiable {
+    let id: String
+    let symbol: String
+    let label: String
+    let keys: [String]
+    let isPrimary: Bool  // Return — violet-filled like the default dialog button
+
+    static func actions(for kind: TextFieldContext.Kind) -> [TextFieldAction] {
+        switch kind {
+        case .text:
+            return [
+                .init(id: "cut",       symbol: "scissors",             label: "Cut",    keys: ["cmd", "x"],          isPrimary: false),
+                .init(id: "copy",      symbol: "doc.on.doc",           label: "Copy",   keys: ["cmd", "c"],          isPrimary: false),
+                .init(id: "paste",     symbol: "doc.on.clipboard",     label: "Paste",  keys: ["cmd", "v"],          isPrimary: false),
+                .init(id: "undo",      symbol: "arrow.uturn.backward", label: "Undo",   keys: ["cmd", "z"],          isPrimary: false),
+                .init(id: "redo",      symbol: "arrow.uturn.forward",  label: "Redo",   keys: ["cmd", "shift", "z"], isPrimary: false),
+                .init(id: "selectAll", symbol: "selection.pin.in.out", label: "All",    keys: ["cmd", "a"],          isPrimary: false),
+                .init(id: "delete",    symbol: "delete.left",          label: "Delete", keys: ["delete"],            isPrimary: false),
+                .init(id: "return",    symbol: "return",               label: "Return", keys: ["return"],            isPrimary: true),
+            ]
+
+        case .numeric:
+            return [
+                .init(id: "dec",    symbol: "minus",                label: "Dec",    keys: ["down"],     isPrimary: false),
+                .init(id: "inc",    symbol: "plus",                 label: "Inc",    keys: ["up"],       isPrimary: false),
+                .init(id: "paste",  symbol: "doc.on.clipboard",     label: "Paste",  keys: ["cmd", "v"], isPrimary: false),
+                .init(id: "undo",   symbol: "arrow.uturn.backward", label: "Undo",   keys: ["cmd", "z"], isPrimary: false),
+                .init(id: "delete", symbol: "delete.left",          label: "Delete", keys: ["delete"],   isPrimary: false),
+                .init(id: "return", symbol: "return",               label: "Enter",  keys: ["return"],   isPrimary: true),
+            ]
+
+        case .secure:
+            // Password fields: macOS blocks cut/copy and many apps will
+            // ignore paste too, so keep the row minimal and focused.
+            return [
+                .init(id: "paste",  symbol: "doc.on.clipboard", label: "Paste",  keys: ["cmd", "v"], isPrimary: false),
+                .init(id: "delete", symbol: "delete.left",      label: "Delete", keys: ["delete"],   isPrimary: false),
+                .init(id: "return", symbol: "return",           label: "Submit", keys: ["return"],   isPrimary: true),
+            ]
+        }
+    }
+}
+
+private struct TextFieldChip: View {
+    let action: TextFieldAction
+    let colorScheme: ColorScheme
+    let onTap: () -> Void
+
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(spacing: 2) {
+                Image(systemName: action.symbol)
+                    .font(.system(size: 13, weight: action.isPrimary ? .semibold : .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(foreground)
+                Text(action.label)
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(foreground.opacity(action.isPrimary ? 0.9 : 0.7))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(minWidth: 48)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(background)
+            )
+            .scaleEffect(isPressed ? 0.93 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isPressed)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded   { _ in isPressed = false }
+        )
+    }
+
+    private var foreground: Color {
+        action.isPrimary ? .white : Color.primary.opacity(0.85)
+    }
+
+    private var background: Color {
+        action.isPrimary ? MirageTheme.violet : MirageTheme.subtleWellFill(colorScheme)
+    }
+}
+
+// MARK: - Dialog Info Button (tap-to-reveal tooltip)
+
+/// Compact violet alert icon shown inside the takeover bar. Tap to pop
+/// over the dialog's title + full message, so long AX copy doesn't steal
+/// horizontal space from the action buttons. Hidden entirely when AX
+/// surfaced neither a title nor a message — in that case the actions
+/// alone carry the context.
+private struct DialogInfoButton: View {
     let title: String?
     let message: String?
     let colorScheme: ColorScheme
 
-    private var primaryText: String {
-        if let m = message, !m.isEmpty { return m }
-        if let t = title, !t.isEmpty { return t }
-        return "Confirm action"
-    }
+    @State private var showingPopover = false
 
-    private var eyebrow: String? {
-        // Only show the eyebrow when we have BOTH a title and a distinct
-        // message — otherwise the eyebrow would echo the primary text.
-        guard let t = title, !t.isEmpty,
-              let m = message, !m.isEmpty, t != m else { return nil }
-        return t.uppercased()
+    private var hasInfo: Bool {
+        (title?.isEmpty == false) || (message?.isEmpty == false)
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.bubble.fill")
-                .font(.system(size: 13, weight: .medium))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(MirageTheme.violet)
-            VStack(alignment: .leading, spacing: 1) {
-                if let eyebrow {
-                    Text(eyebrow)
-                        .font(.system(size: 8, weight: .semibold, design: .rounded))
-                        .tracking(0.6)
-                        .foregroundStyle(Color.secondary.opacity(0.8))
-                        .lineLimit(1)
-                }
-                Text(primaryText)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.primary.opacity(0.92))
-                    .lineLimit(2)
-                    .truncationMode(.tail)
+        if hasInfo {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                showingPopover.toggle()
+            } label: {
+                Image(systemName: "exclamationmark.bubble.fill")
+                    .font(.system(size: 15, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(MirageTheme.violet)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
+                DialogInfoPopover(title: title, message: message, colorScheme: colorScheme)
+                    .presentationCompactAdaptation(.popover)
+            }
+        }
+    }
+}
+
+private struct DialogInfoPopover: View {
+    let title: String?
+    let message: String?
+    let colorScheme: ColorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let title, !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+            }
+            if let message, !message.isEmpty {
+                Text(message)
+                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                    .foregroundStyle(Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(minWidth: 220, maxWidth: 320, alignment: .leading)
     }
 }
 
