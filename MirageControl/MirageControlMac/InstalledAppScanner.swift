@@ -43,6 +43,7 @@ final class InstalledAppScanner {
             URL(fileURLWithPath: "/Applications"),
             URL(fileURLWithPath: "/System/Applications"),
             URL(fileURLWithPath: "/System/Applications/Utilities"),
+            URL(fileURLWithPath: "/System/Cryptexes/App/System/Applications"),
             URL(fileURLWithPath: NSHomeDirectory() + "/Applications"),
         ]
 
@@ -63,6 +64,25 @@ final class InstalledAppScanner {
                 seen.insert(info.bundleID)
                 apps.append(info)
             }
+        }
+
+        // Safety-net: any regular running app that the directory scan
+        // missed gets added from its `NSRunningApplication.bundleURL`.
+        // Modern macOS hides Safari and some system apps inside
+        // cryptex / System volumes where the directory enumerator can
+        // silently fail — we'd still want them in the grid so the
+        // "Apps" tab actually reflects what's on the Mac.
+        //
+        // Uses `runningAppInfo(_:)` which bypasses the LSUIElement /
+        // LSBackgroundOnly filters — a running `.regular` app is by
+        // definition user-facing, regardless of what its Info.plist claims.
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular {
+            guard let bundleID = app.bundleIdentifier,
+                  !seen.contains(bundleID),
+                  let info = runningAppInfo(app) else { continue }
+            seen.insert(bundleID)
+            apps.append(info)
         }
 
         // No artificial cap — even with ~500 apps, 64×64 JPEG icons keep the
@@ -99,6 +119,27 @@ final class InstalledAppScanner {
         // Get icon as compressed JPEG data
         let iconData = compressedIcon(for: url)
 
+        return InstalledAppInfo(
+            bundleID: bundleID,
+            displayName: displayName,
+            iconData: iconData
+        )
+    }
+
+    /// Unfiltered `InstalledAppInfo` from an `NSRunningApplication`. Skips
+    /// the LSUIElement/LSBackgroundOnly checks because we're being called
+    /// for an app the user is literally interacting with right now —
+    /// whatever its Info.plist says about itself, it's user-facing.
+    private func runningAppInfo(_ app: NSRunningApplication) -> InstalledAppInfo? {
+        guard let bundleID = app.bundleIdentifier,
+              let bundleURL = app.bundleURL else { return nil }
+        let bundle = Bundle(url: bundleURL)
+        let info = bundle?.infoDictionary ?? [:]
+        let displayName = (info["CFBundleDisplayName"] as? String)
+            ?? (info["CFBundleName"] as? String)
+            ?? app.localizedName
+            ?? bundleURL.deletingPathExtension().lastPathComponent
+        let iconData = compressedIcon(for: bundleURL)
         return InstalledAppInfo(
             bundleID: bundleID,
             displayName: displayName,

@@ -32,10 +32,12 @@ struct StreamDeckGridView: View {
     @State private var hiddenIDs: Set<String> = []
     @State private var searchText: String = ""
     @State private var sheetApp: InstalledAppInfo?
-    /// User-toggled override that forces the edit-chip row on even when
-    /// AX didn't detect a text field. Controlled by the floating keyboard
-    /// FAB in the bottom-right corner; auto-resets whenever AX takes over
-    /// (dialog or real text-field focus) or the frontmost app changes.
+    /// Whether the edit-chip row is currently visible in the Quick Actions
+    /// bar. Seeded from AX context (true when a text field is focused,
+    /// false otherwise) and flipped directly when the user taps the
+    /// keyboard FAB — so the FAB can both *enable* chips when AX missed
+    /// the field and *disable* them when AX surfaced a field the user
+    /// doesn't care about right now.
     @State private var manualEditMode: Bool = false
 
     private let columns = [
@@ -139,37 +141,29 @@ struct StreamDeckGridView: View {
         }
         .background(Color.clear)
         .overlay(alignment: .bottomTrailing) {
-            // Only surface the keyboard FAB when neither a dialog nor an
-            // AX-detected text field is active — it exists to fill the gap
-            // for apps AX can't read (Chrome web content, Electron, etc.).
-            if shouldShowKeyboardFAB {
-                KeyboardFAB(isActive: manualEditMode) {
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                        manualEditMode.toggle()
-                    }
+            // Always available. The FAB directly represents "are edit
+            // chips visible right now?" — AX seeds it, the user can
+            // override either direction.
+            KeyboardFAB(isActive: manualEditMode) {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                    manualEditMode.toggle()
                 }
-                .padding(.trailing, 24)
-                .padding(.bottom, 24)
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.7).combined(with: .opacity),
-                    removal: .opacity
-                ))
             }
+            .padding(.trailing, 24)
+            .padding(.bottom, 24)
         }
         .onAppear { loadPreferences() }
         .onChange(of: activeBundleID) { _, _ in
-            // Different app in front — the old manual override doesn't
-            // apply. Reset so the user decides deliberately.
-            if manualEditMode {
-                withAnimation(.easeInOut(duration: 0.2)) { manualEditMode = false }
-            }
+            // New frontmost app — reset to whatever AX currently reports
+            // for that app so the FAB state is fresh.
+            syncEditModeToAX()
         }
-        .onChange(of: uiContext) { _, newContext in
-            // AX is now providing context on its own — stand down the
-            // manual override so the FAB stops shouting.
-            if newContext != .none && manualEditMode {
-                withAnimation(.easeInOut(duration: 0.2)) { manualEditMode = false }
-            }
+        .onChange(of: uiContext) { _, _ in
+            // AX context changed within the same app (focus moved into a
+            // text field, dialog opened/closed, etc.). Re-seed so the
+            // FAB reflects the new reality unless the user has already
+            // diverged from it this turn.
+            syncEditModeToAX()
         }
         .sheet(item: $sheetApp) { app in
             AppShortcutsSheet(app: app, sender: sender) {
@@ -180,11 +174,18 @@ struct StreamDeckGridView: View {
         }
     }
 
-    /// Hidden during a dialog (takeover bar owns the screen) and whenever
-    /// AX has already surfaced a text/numeric/secure field (the chips are
-    /// automatically visible; no toggle needed).
-    private var shouldShowKeyboardFAB: Bool {
-        uiContext == .none
+    /// Sets `manualEditMode` to match AX's current opinion about whether
+    /// a text field is focused. Called on app change and on every
+    /// `uiContext` update so the FAB stays in sync with reality.
+    private func syncEditModeToAX() {
+        let axDetected: Bool = {
+            if case .textField = uiContext { return true }
+            return false
+        }()
+        guard manualEditMode != axDetected else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            manualEditMode = axDetected
+        }
     }
 
     // MARK: - Actions

@@ -72,12 +72,15 @@ struct QuickActionsBar: View {
         effectiveTextFieldKind != nil
     }
 
-    /// The kind of edit-chip row to render. AX detection wins when present,
-    /// otherwise falls back to plain `.text` when manual mode is on.
+    /// The kind of edit-chip row to render. The parent view syncs
+    /// `manualEditMode` to whatever AX reports, so this is a single
+    /// source of truth the user can override in either direction via the
+    /// floating keyboard FAB. When AX has classified the field we use
+    /// its kind (numeric / secure); otherwise we fall back to plain text.
     private var effectiveTextFieldKind: TextFieldContext.Kind? {
+        guard manualEditMode else { return nil }
         if case .textField(let ctx) = uiContext { return ctx.kind }
-        if manualEditMode { return .text }
-        return nil
+        return .text
     }
 
     /// Running apps the user can switch to, excluding whichever one is already
@@ -213,7 +216,10 @@ struct QuickActionsBar: View {
             if let kind = effectiveTextFieldKind {
                 chipDivider
                 textFieldChips(kind)
-                    .id("textfield-\(kind.rawValue)-\(manualEditMode ? "manual" : "ax")")
+                    // Keep the id stable across manual vs AX transitions so
+                    // SwiftUI diffs chips rather than re-constructing the
+                    // subtree — avoids the "flash" users perceive as reload.
+                    .id("textfield-\(kind.rawValue)")
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .opacity
