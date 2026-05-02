@@ -32,13 +32,10 @@ struct StreamDeckGridView: View {
     @State private var hiddenIDs: Set<String> = []
     @State private var searchText: String = ""
     @State private var sheetApp: InstalledAppInfo?
-    /// Whether the edit-chip row is currently visible in the Quick Actions
-    /// bar. Seeded from AX context (true when a text field is focused,
-    /// false otherwise) and flipped directly when the user taps the
-    /// keyboard FAB — so the FAB can both *enable* chips when AX missed
-    /// the field and *disable* them when AX surfaced a field the user
-    /// doesn't care about right now.
-    @State private var manualEditMode: Bool = false
+    /// Which auxiliary row (text edit chips vs digit row) is visible in the
+    /// Quick Actions bar. Seeded from AX and switched by the two floating
+    /// FABs; only one mode is active at a time.
+    @State private var editFABMode: EditFABMode = .hidden
 
     private let columns = [
         GridItem(.flexible(), spacing: 16),
@@ -94,7 +91,7 @@ struct StreamDeckGridView: View {
                         activeBundleID: activeBundleID,
                         runningBundleIDs: runningBundleIDs,
                         uiContext: uiContext,
-                        manualEditMode: manualEditMode,
+                        editFABMode: editFABMode,
                         onOpenAppSheet: { sheetApp = $0 }
                     )
                     .padding(.bottom, 20)
@@ -141,29 +138,46 @@ struct StreamDeckGridView: View {
         }
         .background(Color.clear)
         .overlay(alignment: .bottomTrailing) {
-            // Always available. The FAB directly represents "are edit
-            // chips visible right now?" — AX seeds it, the user can
-            // override either direction.
-            KeyboardFAB(isActive: manualEditMode) {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
-                    manualEditMode.toggle()
+            if !isDialogActive {
+                VStack(spacing: 12) {
+                    NumericFAB(isActive: editFABMode == .numericKeypad) {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                            switch editFABMode {
+                            case .numericKeypad: editFABMode = .hidden
+                            case .textEditing: editFABMode = .numericKeypad
+                            case .hidden: editFABMode = .numericKeypad
+                            }
+                        }
+                    }
+                    KeyboardFAB(isActive: editFABMode == .textEditing) {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
+                            switch editFABMode {
+                            case .textEditing: editFABMode = .hidden
+                            case .numericKeypad: editFABMode = .textEditing
+                            case .hidden: editFABMode = .textEditing
+                            }
+                        }
+                    }
                 }
+                .padding(.trailing, 24)
+                .padding(.bottom, 24)
             }
-            .padding(.trailing, 24)
-            .padding(.bottom, 24)
         }
-        .onAppear { loadPreferences() }
+        .onAppear {
+            loadPreferences()
+            syncEditFABModeToAX()
+        }
         .onChange(of: activeBundleID) { _, _ in
             // New frontmost app — reset to whatever AX currently reports
             // for that app so the FAB state is fresh.
-            syncEditModeToAX()
+            syncEditFABModeToAX()
         }
         .onChange(of: uiContext) { _, _ in
             // AX context changed within the same app (focus moved into a
             // text field, dialog opened/closed, etc.). Re-seed so the
             // FAB reflects the new reality unless the user has already
             // diverged from it this turn.
-            syncEditModeToAX()
+            syncEditFABModeToAX()
         }
         .sheet(item: $sheetApp) { app in
             AppShortcutsSheet(app: app, sender: sender) {
@@ -174,17 +188,29 @@ struct StreamDeckGridView: View {
         }
     }
 
-    /// Sets `manualEditMode` to match AX's current opinion about whether
-    /// a text field is focused. Called on app change and on every
-    /// `uiContext` update so the FAB stays in sync with reality.
-    private func syncEditModeToAX() {
-        let axDetected: Bool = {
-            if case .textField = uiContext { return true }
-            return false
+    private var isDialogActive: Bool {
+        if case .dialog = uiContext { return true }
+        return false
+    }
+
+    /// Aligns `editFABMode` with AX: numeric fields prefer the numpad row;
+    /// plain / secure text fields prefer the keyboard row; dialog or no
+    /// field hides both. Called on app change and on every `uiContext` tick.
+    private func syncEditFABModeToAX() {
+        let axDesired: EditFABMode = {
+            switch uiContext {
+            case .dialog, .none:
+                return .hidden
+            case .textField(let ctx):
+                switch ctx.kind {
+                case .numeric: return .numericKeypad
+                case .text, .secure: return .textEditing
+                }
+            }
         }()
-        guard manualEditMode != axDetected else { return }
+        guard editFABMode != axDesired else { return }
         withAnimation(.easeInOut(duration: 0.2)) {
-            manualEditMode = axDetected
+            editFABMode = axDesired
         }
     }
 

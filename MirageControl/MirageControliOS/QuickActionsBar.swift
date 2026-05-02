@@ -20,6 +20,14 @@
 import SwiftUI
 import UIKit
 
+/// Which auxiliary chip row the floating FABs surface in the Quick Actions
+/// contextual segment. Keyboard FAB ↔ text editing; numpad FAB ↔ digits.
+enum EditFABMode: String, Equatable, Sendable {
+    case hidden
+    case textEditing
+    case numericKeypad
+}
+
 struct QuickActionsBar: View {
     let sender: TrackpadSender
     let colorScheme: ColorScheme
@@ -32,12 +40,11 @@ struct QuickActionsBar: View {
     /// When this carries a `.dialog(...)`, the middle segment swaps from
     /// per-app shortcut chips to the dialog's buttons.
     let uiContext: UIContextSnapshot
-    /// User-toggled override. When `true`, the edit chip row is shown
-    /// even if AX didn't detect a focused text field. Powers the
-    /// floating keyboard FAB so people can still reach Cut/Copy/Paste
-    /// in apps whose AX tree doesn't surface text-input focus (web
-    /// content, Electron apps, custom-drawn fields).
-    let manualEditMode: Bool
+    /// Which extra row (if any) is shown after the app shortcut chips.
+    /// Seeded from AX and flipped by the two floating FABs in
+    /// `StreamDeckGridView`. Mutually exclusive: only one auxiliary row
+    /// at a time.
+    let editFABMode: EditFABMode
     /// Invoked when the user taps the app pill, or the "Add shortcuts" CTA
     /// in the empty middle segment. Parent is responsible for presenting
     /// `AppShortcutsSheet`.
@@ -60,27 +67,26 @@ struct QuickActionsBar: View {
         // Compress the per-app shortcut slot when a text field is also being
         // surfaced — so a Chrome user keeps quick access to e.g. New Tab
         // while also seeing Cut / Copy / Paste in the same row.
-        let cap = isTextFieldContext ? 3 : maxContextualChips
+        let cap = hasAuxiliaryEditRow ? 3 : maxContextualChips
         return Array(store.bindings(for: bundleID).prefix(cap))
     }
 
-    /// True when the Mac has told us a text / numeric / secure field is
-    /// focused, or when the user has manually enabled edit mode via the
-    /// floating keyboard FAB. Governs the compression of app-shortcut
-    /// chips so the edit chips fit alongside them.
-    private var isTextFieldContext: Bool {
-        effectiveTextFieldKind != nil
+    /// True when either the text-edit row or the numpad row is visible.
+    private var hasAuxiliaryEditRow: Bool {
+        editFABMode != .hidden
     }
 
-    /// The kind of edit-chip row to render. The parent view syncs
-    /// `manualEditMode` to whatever AX reports, so this is a single
-    /// source of truth the user can override in either direction via the
-    /// floating keyboard FAB. When AX has classified the field we use
-    /// its kind (numeric / secure); otherwise we fall back to plain text.
-    private var effectiveTextFieldKind: TextFieldContext.Kind? {
-        guard manualEditMode else { return nil }
+    /// Kind for the Cut/Copy/Paste row — only when `editFABMode` is
+    /// `.textEditing`. AX classification refines secure vs text; manual
+    /// activation with no AX field defaults to `.text`.
+    private var textEditRowKind: TextFieldContext.Kind? {
+        guard editFABMode == .textEditing else { return nil }
         if case .textField(let ctx) = uiContext { return ctx.kind }
         return .text
+    }
+
+    private var showNumericKeypad: Bool {
+        editFABMode == .numericKeypad
     }
 
     /// Running apps the user can switch to, excluding whichever one is already
@@ -120,6 +126,7 @@ struct QuickActionsBar: View {
         .padding(.horizontal, 20)
         .animation(.spring(response: 0.32, dampingFraction: 0.82), value: activeBundleID)
         .animation(.spring(response: 0.3, dampingFraction: 0.82), value: isDialogActive)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: editFABMode)
     }
 
     /// `true` while the Mac is reporting an active modal dialog/sheet. Drives
@@ -213,17 +220,35 @@ struct QuickActionsBar: View {
             shortcutChipsSegment
                 .id("ctx-\(activeBundleID ?? "none")")
 
-            if let kind = effectiveTextFieldKind {
+            if showNumericKeypad {
+                chipDivider
+                numpadChips
+                    .id("numpad-row")
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .opacity
+                    ))
+            } else if let kind = textEditRowKind {
                 chipDivider
                 textFieldChips(kind)
-                    // Keep the id stable across manual vs AX transitions so
-                    // SwiftUI diffs chips rather than re-constructing the
-                    // subtree — avoids the "flash" users perceive as reload.
                     .id("textfield-\(kind.rawValue)")
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .opacity
                     ))
+            }
+        }
+    }
+
+    private var numpadChips: some View {
+        HStack(spacing: 5) {
+            ForEach(NumpadAction.all) { key in
+                NumpadChip(key: key, colorScheme: colorScheme) {
+                    UIImpactFeedbackGenerator(
+                        style: key.isPrimary ? .medium : .light
+                    ).impactOccurred()
+                    Task { await sender.sendShortcut(key.keys) }
+                }
             }
         }
     }
@@ -539,6 +564,56 @@ struct KeyboardFAB: View {
     }
 }
 
+// MARK: - Numeric FAB
+
+/// Floating toggle for the digit row in the Quick Actions bar. Mutually
+/// exclusive with `KeyboardFAB` — the parent flips `EditFABMode` so only
+/// one auxiliary row is visible at a time.
+struct NumericFAB: View {
+    let isActive: Bool
+    let onTap: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isPressed = false
+
+    private let activeTint = Color(red: 0.15, green: 0.62, blue: 0.58)
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                Circle()
+                    .fill(backgroundColor)
+                    .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
+                Circle()
+                    .strokeBorder(strokeColor, lineWidth: 1)
+                Image(systemName: "textformat.123")
+                    .font(.system(size: 20, weight: .medium))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(isActive ? Color.white : Color.primary.opacity(0.85))
+            }
+            .frame(width: 54, height: 54)
+            .scaleEffect(isPressed ? 0.9 : 1.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.65), value: isPressed)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isActive)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded   { _ in isPressed = false }
+        )
+        .accessibilityLabel(isActive ? "Hide number keys" : "Show number keys")
+    }
+
+    private var backgroundColor: Color {
+        isActive ? activeTint : MirageTheme.subtleWellFill(colorScheme)
+    }
+
+    private var strokeColor: Color {
+        isActive ? activeTint.opacity(0.5) : Color.primary.opacity(0.12)
+    }
+}
+
 // MARK: - Text Field Actions
 
 /// One chip in the text/numeric editing row.
@@ -628,6 +703,90 @@ private struct TextFieldChip: View {
 
     private var background: Color {
         action.isPrimary ? MirageTheme.violet : MirageTheme.subtleWellFill(colorScheme)
+    }
+}
+
+// MARK: - Numpad
+
+private struct NumpadAction: Identifiable {
+    let id: String
+    /// Shown under the key glyph (digit or symbol).
+    let label: String
+    let symbol: String?
+    let keys: [String]
+    let isPrimary: Bool
+
+    /// Keys 1–9, 0, decimal, minus, delete, return — sent as raw
+    /// keyboard events to whatever field is focused on the Mac.
+    static let all: [NumpadAction] = [
+        .init(id: "1", label: "1", symbol: nil, keys: ["1"], isPrimary: false),
+        .init(id: "2", label: "2", symbol: nil, keys: ["2"], isPrimary: false),
+        .init(id: "3", label: "3", symbol: nil, keys: ["3"], isPrimary: false),
+        .init(id: "4", label: "4", symbol: nil, keys: ["4"], isPrimary: false),
+        .init(id: "5", label: "5", symbol: nil, keys: ["5"], isPrimary: false),
+        .init(id: "6", label: "6", symbol: nil, keys: ["6"], isPrimary: false),
+        .init(id: "7", label: "7", symbol: nil, keys: ["7"], isPrimary: false),
+        .init(id: "8", label: "8", symbol: nil, keys: ["8"], isPrimary: false),
+        .init(id: "9", label: "9", symbol: nil, keys: ["9"], isPrimary: false),
+        .init(id: "0", label: "0", symbol: nil, keys: ["0"], isPrimary: false),
+        .init(id: "dot", label: ".", symbol: nil, keys: ["."], isPrimary: false),
+        .init(id: "minus", label: "−", symbol: "minus", keys: ["-"], isPrimary: false),
+        .init(id: "del", label: "Del", symbol: "delete.left", keys: ["delete"], isPrimary: false),
+        .init(id: "ret", label: "Enter", symbol: "return", keys: ["return"], isPrimary: true),
+    ]
+}
+
+private struct NumpadChip: View {
+    let key: NumpadAction
+    let colorScheme: ColorScheme
+    let onTap: () -> Void
+
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: onTap) {
+            Group {
+                if let sym = key.symbol {
+                    VStack(spacing: 2) {
+                        Image(systemName: sym)
+                            .font(.system(size: 13, weight: key.isPrimary ? .semibold : .medium))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(foreground)
+                        Text(key.label)
+                            .font(.system(size: 8, weight: .medium, design: .rounded))
+                            .foregroundStyle(foreground.opacity(0.78))
+                            .lineLimit(1)
+                    }
+                } else {
+                    Text(key.label)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(foreground)
+                }
+            }
+            .frame(minWidth: key.symbol == nil ? 34 : 40, minHeight: 36)
+            .padding(.horizontal, key.symbol == nil ? 6 : 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(background)
+            )
+            .scaleEffect(isPressed ? 0.93 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isPressed)
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded   { _ in isPressed = false }
+        )
+    }
+
+    private var foreground: Color {
+        key.isPrimary ? .white : Color.primary.opacity(0.85)
+    }
+
+    private var background: Color {
+        key.isPrimary ? MirageTheme.violet : MirageTheme.subtleWellFill(colorScheme)
     }
 }
 
