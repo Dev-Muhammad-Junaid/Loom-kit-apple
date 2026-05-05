@@ -38,7 +38,7 @@ final class MacDaemon: ObservableObject {
                 )
             )
         } catch {
-            print("MirageControl: ❌ LoomContainer init failed: \(error)")
+            MirageLog.app.fault("LoomContainer init failed: \(error.localizedDescription, privacy: .public)")
             built = nil
             fatalStartupError = error.localizedDescription
         }
@@ -62,25 +62,42 @@ final class MacDaemon: ObservableObject {
             
             // Start Loom runtime permanently
             do {
-                print("MirageControl: 🚀 Attempting to start LoomContext...")
+                MirageLog.app.info("Starting LoomContext")
                 try await context.start()
-                print("MirageControl: ✅ LoomContext started successfully!")
+                MirageLog.app.info("LoomContext started")
             } catch {
-                print("MirageControl: ❌ FATAL ERROR starting LoomContext: \(error)")
-                print("Error Description: \(error.localizedDescription)")
+                MirageLog.app.fault("LoomContext start failed: \(error.localizedDescription, privacy: .public)")
+                await MainActor.run {
+                    self.fatalStartupError = error.localizedDescription
+                }
             }
             
-            // Observe incoming iOS peer connections
+            // Observe incoming iOS peer connections.
+            //
+            // We don't poll `context.connections` for the snapshot anymore —
+            // the handle itself carries everything we need (`id`, `peer.id`,
+            // `peer.name`). Synthesizing a snapshot from those fields removes
+            // a fragile 100 ms sleep that was racing against Loom's internal
+            // store sync. If LoomKit ever stops emitting the matching
+            // `LoomConnectionSnapshot` synchronously, the auth flow now
+            // doesn't notice — pending requests are still tracked by the
+            // handle ID and resolved through `pendingHandles`.
             for await handle in context.incomingConnections {
                 let id = await handle.id
-                print("MirageControl: 📥 Received incoming connection: \(id)")
-                
-                // allow a micro-delay for context store sync
-                try? await Task.sleep(nanoseconds: 100_000_000)
-                
-                if let snapshot = await MainActor.run(body: { context.connections.first(where: { $0.id == id }) }) {
-                    await DeviceAuthorizationManager.shared.handleIncomingConnection(snapshot, handle: handle)
-                }
+                let peer = await handle.peer
+                MirageLog.connection.info("Incoming connection \(id, privacy: .public) from \(peer.name, privacy: .public)")
+
+                let snapshot = LoomConnectionSnapshot(
+                    id: id,
+                    peerID: peer.id,
+                    peerName: peer.name,
+                    state: .connected,
+                    transportKind: .tcp,
+                    connectedAt: Date(),
+                    lastError: nil
+                )
+
+                await DeviceAuthorizationManager.shared.handleIncomingConnection(snapshot, handle: handle)
             }
         }
 

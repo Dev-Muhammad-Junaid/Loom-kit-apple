@@ -87,8 +87,8 @@ final class ControlReceiver {
             default: break
             }
             
-        case .requestScreenshot:
-            await handleScreenshotRequest(handle: handle)
+        case let .requestScreenshot(requestID):
+            await handleScreenshotRequest(requestID: requestID, handle: handle)
 
         case .requestAppList:
             await handleAppListRequest(handle: handle)
@@ -120,27 +120,29 @@ final class ControlReceiver {
 
     /// Captures the main display via ScreenCaptureKit and sends the JPEG back,
     /// or sends a descriptive `screenshotError` so the iPad can dismiss its
-    /// spinner and show a useful message.
-    private func handleScreenshotRequest(handle: LoomConnectionHandle) async {
+    /// spinner and show a useful message. The `requestID` is echoed verbatim
+    /// so the iPad can drop responses belonging to a timed-out earlier tap.
+    private func handleScreenshotRequest(requestID: String, handle: LoomConnectionHandle) async {
         do {
             let jpeg = try await ScreenCaptureService.shared.captureMainDisplayJPEG()
-            try await handle.send(JSONEncoder().encode(ControlMessage.screenshotData(data: jpeg)))
+            try await handle.send(.screenshotData(requestID: requestID, data: jpeg))
         } catch ScreenCaptureService.CaptureError.permissionDenied {
-            await sendError(to: handle,
+            await sendError(requestID: requestID, to: handle,
                             message: "Screen Recording permission required. Please allow MirageControl in System Settings > Privacy & Security > Screen Recording, then try again.")
         } catch ScreenCaptureService.CaptureError.noDisplay {
-            await sendError(to: handle, message: "Display capture failed. No displays found.")
+            await sendError(requestID: requestID, to: handle, message: "Display capture failed. No displays found.")
         } catch ScreenCaptureService.CaptureError.captureFailed(let detail) {
-            await sendError(to: handle, message: "Capture failed: \(detail)")
+            await sendError(requestID: requestID, to: handle, message: "Capture failed: \(detail)")
         } catch ScreenCaptureService.CaptureError.encodeFailed {
-            await sendError(to: handle, message: "Image compression failed.")
+            await sendError(requestID: requestID, to: handle, message: "Image compression failed.")
         } catch {
-            await sendError(to: handle, message: "Unexpected capture error: \(error.localizedDescription)")
+            await sendError(requestID: requestID, to: handle,
+                            message: "Unexpected capture error: \(error.localizedDescription)")
         }
     }
 
-    private func sendError(to handle: LoomConnectionHandle, message: String) async {
-        try? await handle.send(try JSONEncoder().encode(ControlMessage.screenshotError(message: message)))
+    private func sendError(requestID: String, to handle: LoomConnectionHandle, message: String) async {
+        try? await handle.send(.screenshotError(requestID: requestID, message: message))
     }
 
     private func dispatchMacro(id: String) async {
@@ -191,14 +193,12 @@ final class ControlReceiver {
 
     private func handleAppListRequest(handle: LoomConnectionHandle) async {
         let apps = InstalledAppScanner.shared.installedApps()
-        let message = ControlMessage.appListResponse(apps: apps)
-        try? await handle.send(try JSONEncoder().encode(message))
+        try? await handle.send(.appListResponse(apps: apps))
     }
 
     private func handleMenuShortcutsRequest(bundleID: String, handle: LoomConnectionHandle) async {
         let shortcuts = await MenuShortcutDiscovery.discover(bundleID: bundleID, launcher: launcher)
-        let message = ControlMessage.appMenuShortcutsResponse(bundleID: bundleID, shortcuts: shortcuts)
-        try? await handle.send(try JSONEncoder().encode(message))
+        try? await handle.send(.appMenuShortcutsResponse(bundleID: bundleID, shortcuts: shortcuts))
     }
 
     func removeConnection(id: UUID) {

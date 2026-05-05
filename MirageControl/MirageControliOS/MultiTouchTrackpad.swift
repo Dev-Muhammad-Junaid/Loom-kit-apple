@@ -116,11 +116,17 @@ final class TouchTrackingView: UIView {
             mediumHaptic.prepare()
             heavyHaptic.prepare()
 
-            // Schedule long press (right-click)
+            // Schedule long press (right-click). Re-validate touch state after
+            // the sleep so a second finger landing within the 400 ms window
+            // (or the user dragging past the dead zone) doesn't race against
+            // the timer and synthesize a phantom right-click.
             longPressTimer?.cancel()
             longPressTimer = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 400_000_000)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled,
+                      self.activeTouches.count == 1,
+                      !self.hasMoved
+                else { return }
                 self.longPressFired = true
                 self.heavyHaptic.impactOccurred()
                 self.callbacks.onLongPress(loc)

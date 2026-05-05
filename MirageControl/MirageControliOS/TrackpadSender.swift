@@ -11,7 +11,6 @@ import QuartzCore
 /// Tuned for buttery-smooth 120 Hz trackpad input on iPad Pro (ProMotion).
 actor TrackpadSender {
     private let handle: LoomConnectionHandle
-    private let encoder = JSONEncoder()
 
     // ── Timing ──────────────────────────────────────────────────────
     // 120 Hz matches iPad Pro's ProMotion refresh rate so no touch
@@ -154,8 +153,10 @@ actor TrackpadSender {
         await send(.triggerContextAction(id: id))
     }
 
-    func requestScreenshot() async {
-        await send(.requestScreenshot)
+    /// Issues a screenshot request tagged with `requestID` so the iPad can
+    /// reject responses that belong to a previous, timed-out request.
+    func requestScreenshot(requestID: String) async {
+        await send(.requestScreenshot(requestID: requestID))
     }
 
     func requestAppList() async {
@@ -177,7 +178,6 @@ actor TrackpadSender {
     // MARK: - Core send
 
     private func send(_ message: ControlMessage) async {
-        guard let data = try? encoder.encode(message) else { return }
-        try? await handle.send(data)
+        try? await handle.send(message)
     }
 }

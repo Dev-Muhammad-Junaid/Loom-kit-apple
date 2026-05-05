@@ -18,10 +18,13 @@ public enum ControlMessage: Codable, Sendable {
     case authorizationStatus(status: String)
     
     // Bidirectional/New Features
-    case requestScreenshot
+    /// iPad → Mac: request a fresh screen capture. `requestID` is echoed back
+    /// in the response so a slow, late-arriving capture from a previous tap
+    /// can't hijack the UI of the next request.
+    case requestScreenshot(requestID: String)
     case mediaCommand(action: String)
-    case screenshotData(data: Data)
-    case screenshotError(message: String)
+    case screenshotData(requestID: String, data: Data)
+    case screenshotError(requestID: String, message: String)
     case activeAppUpdate(name: String, bundleID: String?)
 
     // App Launcher
@@ -63,7 +66,7 @@ public enum ControlMessage: Codable, Sendable {
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot
+        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot, requestID
     }
 
     private enum MessageType: String, Codable {
@@ -100,13 +103,21 @@ public enum ControlMessage: Codable, Sendable {
         case .authorizationStatus:
             self = .authorizationStatus(status: try c.decode(String.self, forKey: .status))
         case .requestScreenshot:
-            self = .requestScreenshot
+            self = .requestScreenshot(
+                requestID: try c.decode(String.self, forKey: .requestID)
+            )
         case .mediaCommand:
             self = .mediaCommand(action: try c.decode(String.self, forKey: .action))
         case .screenshotData:
-            self = .screenshotData(data: try c.decode(Data.self, forKey: .data))
+            self = .screenshotData(
+                requestID: try c.decode(String.self, forKey: .requestID),
+                data: try c.decode(Data.self, forKey: .data)
+            )
         case .screenshotError:
-            self = .screenshotError(message: try c.decode(String.self, forKey: .message))
+            self = .screenshotError(
+                requestID: try c.decode(String.self, forKey: .requestID),
+                message: try c.decode(String.self, forKey: .message)
+            )
         case .activeAppUpdate:
             self = .activeAppUpdate(name: try c.decode(String.self, forKey: .name),
                                     bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID))
@@ -168,16 +179,19 @@ public enum ControlMessage: Codable, Sendable {
         case let .authorizationStatus(status):
             try c.encode(MessageType.authorizationStatus, forKey: .type)
             try c.encode(status, forKey: .status)
-        case .requestScreenshot:
+        case let .requestScreenshot(requestID):
             try c.encode(MessageType.requestScreenshot, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
         case let .mediaCommand(action):
             try c.encode(MessageType.mediaCommand, forKey: .type)
             try c.encode(action, forKey: .action)
-        case let .screenshotData(data):
+        case let .screenshotData(requestID, data):
             try c.encode(MessageType.screenshotData, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
             try c.encode(data, forKey: .data)
-        case let .screenshotError(message):
+        case let .screenshotError(requestID, message):
             try c.encode(MessageType.screenshotError, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
             try c.encode(message, forKey: .message)
         case let .activeAppUpdate(name, bundleID):
             try c.encode(MessageType.activeAppUpdate, forKey: .type)

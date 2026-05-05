@@ -39,6 +39,11 @@ struct ControlView: View {
     @State private var isScreenshotPresented = false
     @State private var screenshotTimeoutTask: Task<Void, Never>?
     @State private var screenshotErrorMessage: String?
+    /// Token of the most recently issued screenshot request. Responses
+    /// echo this value back; any mismatch is dropped on the floor so a
+    /// slow, late-arriving capture from a previous tap can't show up
+    /// inside the next request's full-screen cover.
+    @State private var screenshotRequestID: String?
 
     enum Tab: String, CaseIterable {
         case trackpad   = "Trackpad"
@@ -114,6 +119,8 @@ struct ControlView: View {
                             )
                             Button("Cancel") {
                                 screenshotTimeoutTask?.cancel()
+                                screenshotRequestID = nil
+                                isRequestingScreenshot = false
                                 isScreenshotPresented = false
                             }
                             .font(MirageTheme.TypeStyle.captionRounded)
@@ -192,9 +199,19 @@ struct ControlView: View {
                         activeBundleID = bundleID
                     }
 
-                case let .screenshotData(data):
+                case let .screenshotData(requestID, data):
+                    // Drop responses for a request we've already given up on
+                    // (timeout fired, user dismissed, or a newer request
+                    // overwrote the token).
+                    guard requestID == screenshotRequestID else {
+                        #if DEBUG
+                        print("MirageControliOS: ⏭️ dropping stale screenshotData (\(requestID))")
+                        #endif
+                        break
+                    }
                     screenshotTimeoutTask?.cancel()
                     isRequestingScreenshot = false
+                    screenshotRequestID = nil
                     if let img = UIImage(data: data) {
                         screenshotImage = img
                         // isScreenshotPresented is already true; ZStack swaps to ScreenshotPreviewView
@@ -204,9 +221,16 @@ struct ControlView: View {
                         screenshotErrorMessage = "Received invalid image data from Mac."
                     }
 
-                case let .screenshotError(message):
+                case let .screenshotError(requestID, message):
+                    guard requestID == screenshotRequestID else {
+                        #if DEBUG
+                        print("MirageControliOS: ⏭️ dropping stale screenshotError (\(requestID))")
+                        #endif
+                        break
+                    }
                     screenshotTimeoutTask?.cancel()
                     isRequestingScreenshot = false
+                    screenshotRequestID = nil
                     isScreenshotPresented = false
                     screenshotErrorMessage = message
 
@@ -296,8 +320,10 @@ struct ControlView: View {
                     screenshotErrorMessage = nil
                     isRequestingScreenshot = true
                     isScreenshotPresented = true
+                    let requestID = UUID().uuidString
+                    screenshotRequestID = requestID
 
-                    Task { await sender?.requestScreenshot() }
+                    Task { await sender?.requestScreenshot(requestID: requestID) }
 
                     // Cancel any previous timeout and start a fresh 8-second window
                     screenshotTimeoutTask?.cancel()
@@ -307,7 +333,11 @@ struct ControlView: View {
                         } catch {
                             return // Cancelled because image/error arrived — nothing to do
                         }
-                        // Sleep completed naturally — Mac never responded
+                        // Sleep completed naturally — Mac never responded.
+                        // Clear the request ID so any *eventual* response is
+                        // discarded as stale rather than hijacking the next tap.
+                        guard screenshotRequestID == requestID else { return }
+                        screenshotRequestID = nil
                         isRequestingScreenshot = false
                         isScreenshotPresented = false
                         screenshotErrorMessage = "The Mac didn't respond in time. Make sure Screen Recording is allowed in System Settings > Privacy & Security > Screen Recording."

@@ -79,14 +79,6 @@ struct ScreenshotPreviewView: View {
             // Top bar
             VStack {
                 HStack {
-                    // Mac display dimensions badge
-                    Text("\(Int(image.size.width * image.scale)) × \(Int(image.size.height * image.scale))")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(.white.opacity(0.1)))
-
                     if annotatedImage != nil {
                         Text("Annotated")
                             .font(.system(size: 10, weight: .semibold))

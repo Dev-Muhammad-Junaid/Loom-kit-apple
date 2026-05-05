@@ -11,7 +11,7 @@ struct TrackpadView: View {
     let sender: TrackpadSender
     let colorScheme: ColorScheme
 
-    @State private var sensitivity: Float = 1.8
+    @State private var sensitivity: Float = 1.75
     @State private var scrollMode: Bool = false
     @State private var activeGesture: TrackpadGestureKind?
     @State private var ripplePos: CGPoint?
@@ -129,15 +129,26 @@ struct TrackpadView: View {
             .padding(.top, 16)
 
             // ── Sensitivity slider ────────────────────────────────────
+            // Snaps to the same notches the readout label exposes so the
+            // displayed multiplier is always exactly what the user sees.
             HStack(spacing: 8) {
                 Image(systemName: "tortoise")
                     .foregroundStyle(Color.secondary)
                     .font(.system(size: 12))
-                Slider(value: $sensitivity, in: 0.5...4.0)
-                    .tint(Color.primary.opacity(0.6))
+                Slider(
+                    value: $sensitivity,
+                    in: TrackpadSensitivity.range,
+                    step: TrackpadSensitivity.step
+                )
+                .tint(Color.primary.opacity(0.6))
                 Image(systemName: "hare")
                     .foregroundStyle(Color.secondary)
                     .font(.system(size: 12))
+                Text(TrackpadSensitivity.label(for: sensitivity))
+                    .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 36, alignment: .trailing)
+                    .accessibilityLabel("Sensitivity \(TrackpadSensitivity.label(for: sensitivity))")
             }
             .padding(.horizontal, 28)
             .padding(.top, 8)
@@ -286,6 +297,23 @@ private struct ScrollToggleButton: View {
             .scaleEffect(isActive ? 0.95 : 1.0)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Sensitivity Snap
+
+/// Discrete sensitivity stops + readout formatting. Centralized so the
+/// slider, the label, and any future settings UI agree on the same set.
+enum TrackpadSensitivity {
+    static let range: ClosedRange<Float> = 0.5...4.0
+    static let step: Float = 0.25
+
+    static func label(for value: Float) -> String {
+        let snapped = (value * 4).rounded() / 4   // match the 0.25 step
+        if snapped == snapped.rounded() {
+            return "\(Int(snapped))×"
+        }
+        return String(format: "%.2g×", snapped)
     }
 }
 
