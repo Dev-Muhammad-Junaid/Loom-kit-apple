@@ -193,6 +193,7 @@ struct ControlView: View {
         .sheet(isPresented: $isWindowPickerPresented) {
             WindowPickerView(
                 windows: availableWindows,
+                runningBundleIDs: runningBundleIDs,
                 isLoading: isWindowListLoading,
                 onPick: { window in
                     isWindowPickerPresented = false
@@ -204,7 +205,7 @@ struct ControlView: View {
                 },
                 onCancel: { isWindowPickerPresented = false }
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.large])
             .presentationDragIndicator(.visible)
         }
         // OCR result sheet — fronts after an ocr-intent capture lands.

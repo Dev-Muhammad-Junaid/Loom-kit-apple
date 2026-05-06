@@ -2,19 +2,29 @@
 //  CursorLocator.swift
 //  MirageControlMac
 //
-//  Floating overlay that pulses a violet ring + crosshair at the live
+//  Floating overlay that pulses a multi-color target ring at the live
 //  cursor position so a user looking at the iPad can spot where the Mac
 //  cursor is. Triggered by the iPad's "Locate" gesture button.
 //
+//  Visual design — built to survive any wallpaper:
+//    • Outer pulse — violet, expanding + fading. White stroke under it for
+//      contrast on light backgrounds.
+//    • Solid main ring — thick violet stroke (6pt) with a tighter white
+//      halo just outside (2pt). Reads as a "target" silhouette.
+//    • Inner ring — yellow (3pt). Yellow + violet is a high-contrast pair
+//      that stays visible on both light and dark surfaces.
+//    • Crosshair — 4pt violet arms with a 1.5pt white stroke under, leaving
+//      a 22pt clear zone in the middle so the actual cursor stays visible.
+//
 //  Implementation notes:
-//   • Uses a borderless `NSPanel` per display so multi-monitor setups
-//     show the indicator on whichever screen the cursor is currently on.
-//   • The panel is `ignoresMouseEvents = true` and `level = .statusBar`
-//     so it floats above everything (including full-screen apps) without
-//     stealing input.
-//   • The animation is a 1.5 s sequence that doesn't require pulling in
-//     AppKit's view animation system — `NSAnimationContext` with explicit
-//     keyframes keeps the implementation small and deterministic.
+//    • Uses a borderless `NSPanel` per ping — repositioned to whichever
+//      display the cursor currently lives on so multi-monitor setups
+//      always show the indicator on the right screen.
+//    • The panel is `ignoresMouseEvents = true` and `level = .statusBar`
+//      so it floats above everything (including full-screen apps) without
+//      stealing input.
+//    • The animation is a 1.5 s sequence built from `CABasicAnimation` /
+//      `CAKeyframeAnimation` — no AppKit view animation system needed.
 //
 
 import AppKit
@@ -28,6 +38,10 @@ final class CursorLocator {
     private var panel: NSPanel?
     private var dismissTask: Task<Void, Never>?
 
+    /// Outer dimension of the indicator window. Kept generous so the
+    /// thicker strokes + outer pulse have room to render.
+    private let indicatorEdge: CGFloat = 260
+
     private init() {}
 
     /// Briefly highlights the cursor's current position. Idempotent: a
@@ -37,7 +51,7 @@ final class CursorLocator {
     func ping() {
         dismissTask?.cancel()
 
-        let indicatorSize = NSSize(width: 220, height: 220)
+        let indicatorSize = NSSize(width: indicatorEdge, height: indicatorEdge)
         let cursorScreenPoint = NSEvent.mouseLocation
         let origin = NSPoint(
             x: cursorScreenPoint.x - indicatorSize.width / 2,
@@ -99,9 +113,13 @@ final class CursorLocator {
 // MARK: - Indicator view
 
 private final class LocatorIndicatorView: NSView {
-    private let ringLayer = CAShapeLayer()
-    private let pulseLayer = CAShapeLayer()
-    private let crossLayer = CAShapeLayer()
+    private let outerPulseHalo  = CAShapeLayer()   // white halo under outer pulse
+    private let outerPulse      = CAShapeLayer()   // violet outer pulse
+    private let mainRingHalo    = CAShapeLayer()   // white halo around main ring
+    private let mainRing        = CAShapeLayer()   // violet main ring
+    private let innerRing       = CAShapeLayer()   // yellow target ring
+    private let crossHalo       = CAShapeLayer()   // white halo under crosshair
+    private let crossLayer      = CAShapeLayer()   // violet crosshair
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -114,95 +132,162 @@ private final class LocatorIndicatorView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    private var brandColor: NSColor {
-        // Violet matches the iPad client's brand accent.
+    private var violet: NSColor {
         NSColor(red: 0x6C / 255.0, green: 0x63 / 255.0, blue: 0xFF / 255.0, alpha: 1.0)
+    }
+    private var yellow: NSColor {
+        NSColor(red: 0xFA / 255.0, green: 0xCC / 255.0, blue: 0x15 / 255.0, alpha: 1.0)
+    }
+    private var halo: NSColor {
+        // Slightly softened white so the halos don't clip on light walls.
+        NSColor(white: 1.0, alpha: 0.95)
     }
 
     private func configureLayers() {
         guard let layer else { return }
         let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        let ringRadius: CGFloat = 36
 
-        // Solid ring around the cursor.
-        ringLayer.frame = bounds
-        ringLayer.path = CGPath(
+        // ── Main ring (target silhouette) ────────────────────────────────
+        let mainRadius: CGFloat = 42
+        let mainPath = CGPath(
             ellipseIn: CGRect(
-                x: center.x - ringRadius,
-                y: center.y - ringRadius,
-                width: ringRadius * 2,
-                height: ringRadius * 2
+                x: center.x - mainRadius,
+                y: center.y - mainRadius,
+                width: mainRadius * 2,
+                height: mainRadius * 2
             ),
             transform: nil
         )
-        ringLayer.fillColor = NSColor.clear.cgColor
-        ringLayer.strokeColor = brandColor.cgColor
-        ringLayer.lineWidth = 3
-        ringLayer.opacity = 0
-        layer.addSublayer(ringLayer)
 
-        // Outer pulse that fades + grows.
-        pulseLayer.frame = bounds
-        pulseLayer.path = ringLayer.path
-        pulseLayer.fillColor = NSColor.clear.cgColor
-        pulseLayer.strokeColor = brandColor.withAlphaComponent(0.6).cgColor
-        pulseLayer.lineWidth = 5
-        pulseLayer.opacity = 0
-        layer.addSublayer(pulseLayer)
+        mainRingHalo.frame = bounds
+        mainRingHalo.path = mainPath
+        mainRingHalo.fillColor = NSColor.clear.cgColor
+        mainRingHalo.strokeColor = halo.cgColor
+        mainRingHalo.lineWidth = 9
+        mainRingHalo.opacity = 0
+        layer.addSublayer(mainRingHalo)
 
-        // Crosshair lines that point in to the cursor.
-        let armLength: CGFloat = 70
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: center.x - armLength, y: center.y))
-        path.addLine(to: CGPoint(x: center.x - 22, y: center.y))
-        path.move(to: CGPoint(x: center.x + 22, y: center.y))
-        path.addLine(to: CGPoint(x: center.x + armLength, y: center.y))
-        path.move(to: CGPoint(x: center.x, y: center.y - armLength))
-        path.addLine(to: CGPoint(x: center.x, y: center.y - 22))
-        path.move(to: CGPoint(x: center.x, y: center.y + 22))
-        path.addLine(to: CGPoint(x: center.x, y: center.y + armLength))
+        mainRing.frame = bounds
+        mainRing.path = mainPath
+        mainRing.fillColor = NSColor.clear.cgColor
+        mainRing.strokeColor = violet.cgColor
+        mainRing.lineWidth = 6
+        mainRing.opacity = 0
+        layer.addSublayer(mainRing)
+
+        // ── Inner yellow ring ────────────────────────────────────────────
+        let innerRadius: CGFloat = 28
+        let innerPath = CGPath(
+            ellipseIn: CGRect(
+                x: center.x - innerRadius,
+                y: center.y - innerRadius,
+                width: innerRadius * 2,
+                height: innerRadius * 2
+            ),
+            transform: nil
+        )
+        innerRing.frame = bounds
+        innerRing.path = innerPath
+        innerRing.fillColor = NSColor.clear.cgColor
+        innerRing.strokeColor = yellow.cgColor
+        innerRing.lineWidth = 3
+        innerRing.opacity = 0
+        layer.addSublayer(innerRing)
+
+        // ── Outer pulse ──────────────────────────────────────────────────
+        let pulsePath = mainPath
+        outerPulseHalo.frame = bounds
+        outerPulseHalo.path = pulsePath
+        outerPulseHalo.fillColor = NSColor.clear.cgColor
+        outerPulseHalo.strokeColor = halo.cgColor
+        outerPulseHalo.lineWidth = 9
+        outerPulseHalo.opacity = 0
+        layer.addSublayer(outerPulseHalo)
+
+        outerPulse.frame = bounds
+        outerPulse.path = pulsePath
+        outerPulse.fillColor = NSColor.clear.cgColor
+        outerPulse.strokeColor = violet.withAlphaComponent(0.85).cgColor
+        outerPulse.lineWidth = 7
+        outerPulse.opacity = 0
+        layer.addSublayer(outerPulse)
+
+        // ── Crosshair (with halo for contrast) ───────────────────────────
+        let armOuter: CGFloat = 78
+        let armInner: CGFloat = 22
+        let crossPath = CGMutablePath()
+        crossPath.move(to: CGPoint(x: center.x - armOuter, y: center.y))
+        crossPath.addLine(to: CGPoint(x: center.x - armInner, y: center.y))
+        crossPath.move(to: CGPoint(x: center.x + armInner, y: center.y))
+        crossPath.addLine(to: CGPoint(x: center.x + armOuter, y: center.y))
+        crossPath.move(to: CGPoint(x: center.x, y: center.y - armOuter))
+        crossPath.addLine(to: CGPoint(x: center.x, y: center.y - armInner))
+        crossPath.move(to: CGPoint(x: center.x, y: center.y + armInner))
+        crossPath.addLine(to: CGPoint(x: center.x, y: center.y + armOuter))
+
+        crossHalo.frame = bounds
+        crossHalo.path = crossPath
+        crossHalo.strokeColor = halo.cgColor
+        crossHalo.lineWidth = 7
+        crossHalo.lineCap = .round
+        crossHalo.opacity = 0
+        layer.addSublayer(crossHalo)
+
         crossLayer.frame = bounds
-        crossLayer.path = path
-        crossLayer.strokeColor = brandColor.cgColor
-        crossLayer.lineWidth = 2
+        crossLayer.path = crossPath
+        crossLayer.strokeColor = violet.cgColor
+        crossLayer.lineWidth = 4
         crossLayer.lineCap = .round
         crossLayer.opacity = 0
         layer.addSublayer(crossLayer)
     }
 
     func startAnimation() {
-        // Ring fade-in
-        let ringIn = CABasicAnimation(keyPath: "opacity")
-        ringIn.fromValue = 0
-        ringIn.toValue = 1
-        ringIn.duration = 0.18
-        ringIn.fillMode = .forwards
-        ringIn.isRemovedOnCompletion = false
-        ringLayer.add(ringIn, forKey: "ringIn")
+        // Static elements fade in.
+        let staticLayers: [CALayer] = [
+            mainRingHalo, mainRing, innerRing, crossHalo, crossLayer,
+        ]
+        for l in staticLayers {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = 0.18
+            fade.fillMode = .forwards
+            fade.isRemovedOnCompletion = false
+            l.add(fade, forKey: "fadeIn")
+        }
 
-        let crossIn = CABasicAnimation(keyPath: "opacity")
-        crossIn.fromValue = 0
-        crossIn.toValue = 1
-        crossIn.duration = 0.18
-        crossIn.fillMode = .forwards
-        crossIn.isRemovedOnCompletion = false
-        crossLayer.add(crossIn, forKey: "crossIn")
+        // Inner yellow ring gets a small "attention beat" scale pulse so
+        // it punctuates the violet outer ring.
+        let innerPulse = CABasicAnimation(keyPath: "transform.scale")
+        innerPulse.fromValue = 0.85
+        innerPulse.toValue = 1.0
+        innerPulse.duration = 0.32
+        innerPulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        innerRing.add(innerPulse, forKey: "innerPulse")
 
-        // Pulse: opacity in then out, scale up.
-        let pulseGroup = CAAnimationGroup()
-        pulseGroup.duration = 0.9
-        pulseGroup.repeatCount = 1.0
+        // Outer pulse: opacity ramps in then out, scale grows. We animate
+        // halo + violet stroke as a group so they expand together.
+        let pulseDuration: CFTimeInterval = 0.95
+        for (index, l) in [outerPulseHalo, outerPulse].enumerated() {
+            let group = CAAnimationGroup()
+            group.duration = pulseDuration
+            group.repeatCount = 1.0
 
-        let pulseFade = CAKeyframeAnimation(keyPath: "opacity")
-        pulseFade.values = [0.0, 0.85, 0.0]
-        pulseFade.keyTimes = [0.0, 0.4, 1.0]
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            // Halo is a touch dimmer than the violet so it reads as a
+            // contrasting underline rather than competing for the eye.
+            let peak = (index == 0) ? 0.55 : 0.85
+            fade.values = [0.0, peak, 0.0]
+            fade.keyTimes = [0.0, 0.4, 1.0]
 
-        let pulseScale = CABasicAnimation(keyPath: "transform.scale")
-        pulseScale.fromValue = 0.6
-        pulseScale.toValue = 1.7
-        pulseScale.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            let scale = CABasicAnimation(keyPath: "transform.scale")
+            scale.fromValue = 0.6
+            scale.toValue = 1.7
+            scale.timingFunction = CAMediaTimingFunction(name: .easeOut)
 
-        pulseGroup.animations = [pulseFade, pulseScale]
-        pulseLayer.add(pulseGroup, forKey: "pulse")
+            group.animations = [fade, scale]
+            l.add(group, forKey: "pulse")
+        }
     }
 }

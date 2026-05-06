@@ -2,10 +2,21 @@
 //  WindowPickerView.swift
 //  MirageControliOS
 //
-//  Modal sheet that lists every visible Mac window (from the latest
-//  `windowListResponse`) so the user can pick a single one to capture.
-//  Grouped by app for quick scanning; Cmd-Tab order is implicit through
-//  the parent's `runningBundleIDs` if we ever want to surface it later.
+//  Modal sheet that shows every visible Mac window from the latest
+//  `windowListResponse` so the user can pick one to capture.
+//
+//  Layout: an adaptive `LazyVGrid` so wider devices (iPad, iPhone Pro Max
+//  in landscape) see more cells per row and selection stays fast. Cells
+//  show the owning app icon + app name + window title.
+//
+//  Order: most-recently-active first via the parent's `runningBundleIDs`
+//  (Cmd+Tab order). Windows whose owning bundle isn't currently in the
+//  Mac's running list fall to the end, sorted alphabetically by app name.
+//
+//  Tap routing: a `ButtonStyle` exposes press feedback, so we don't need a
+//  competing `simultaneousGesture(DragGesture)` — that earlier approach
+//  was eating taps inside the sheet, which is why the picker used to feel
+//  unresponsive.
 //
 
 import SwiftUI
@@ -13,6 +24,9 @@ import UIKit
 
 struct WindowPickerView: View {
     let windows: [WindowInfo]
+    /// Cmd+Tab-ordered bundle IDs supplied by `RunningAppMonitor` via
+    /// `ControlView`. Used purely for sorting; not displayed.
+    let runningBundleIDs: [String]
     let isLoading: Bool
     let onPick: (WindowInfo) -> Void
     let onRefresh: () -> Void
@@ -20,12 +34,27 @@ struct WindowPickerView: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
-    // Group windows by their owning app for a calmer list.
-    private var grouped: [(app: String, items: [WindowInfo])] {
-        let dict = Dictionary(grouping: windows, by: \.appName)
-        return dict
-            .map { ($0.key, $0.value) }
-            .sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
+    private let columns = [
+        GridItem(.adaptive(minimum: 110, maximum: 140), spacing: 14)
+    ]
+
+    private var orderedWindows: [WindowInfo] {
+        // Build a rank table from `runningBundleIDs`. Lower index = more
+        // recent. Bundles not present rank at `Int.max` so they sort to
+        // the end, keeping a stable secondary order by app name + title.
+        let rankByBundle: [String: Int] = Dictionary(
+            uniqueKeysWithValues: runningBundleIDs.enumerated().map { ($1, $0) }
+        )
+        return windows.sorted { lhs, rhs in
+            let lRank = lhs.bundleID.flatMap { rankByBundle[$0] } ?? .max
+            let rRank = rhs.bundleID.flatMap { rankByBundle[$0] } ?? .max
+            if lRank != rRank { return lRank < rRank }
+            let appCompare = lhs.appName.localizedCaseInsensitiveCompare(rhs.appName)
+            if appCompare != .orderedSame {
+                return appCompare == .orderedAscending
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
     }
 
     var body: some View {
@@ -39,7 +68,7 @@ struct WindowPickerView: View {
                 } else if windows.isEmpty {
                     emptyState
                 } else {
-                    list
+                    grid
                 }
             }
             .navigationTitle("Capture Window")
@@ -65,35 +94,23 @@ struct WindowPickerView: View {
         }
     }
 
-    private var list: some View {
+    private var grid: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(grouped, id: \.app) { group in
-                    sectionHeader(group.app)
-                    ForEach(group.items) { window in
-                        Button {
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            onPick(window)
-                        } label: {
-                            WindowRow(window: window, colorScheme: colorScheme)
-                        }
-                        .buttonStyle(.plain)
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                ForEach(orderedWindows) { window in
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        onPick(window)
+                    } label: {
+                        WindowCell(window: window, colorScheme: colorScheme)
                     }
+                    .buttonStyle(WindowCellButtonStyle())
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
             .padding(.bottom, 24)
         }
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.secondary.opacity(0.85))
-            .tracking(0.5)
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
-            .padding(.bottom, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var emptyState: some View {
@@ -123,49 +140,42 @@ struct WindowPickerView: View {
     }
 }
 
-// MARK: - Row
+// MARK: - Cell
 
-private struct WindowRow: View {
+private struct WindowCell: View {
     let window: WindowInfo
     let colorScheme: ColorScheme
 
-    @State private var isPressed = false
-
     var body: some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .center, spacing: 6) {
             icon
-                .frame(width: 38, height: 38)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(window.title)
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(1)
-                Text(window.appName)
-                    .font(.system(size: 11, design: .rounded))
-                    .foregroundStyle(Color.secondary)
-            }
+            Text(window.appName)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
 
-            Spacer()
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.secondary.opacity(0.6))
+            Text(window.title)
+                .font(.system(size: 10, weight: .regular, design: .rounded))
+                .foregroundStyle(Color.secondary)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(height: 26, alignment: .top)
         }
-        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity)
         .padding(.vertical, 10)
+        .padding(.horizontal, 6)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(MirageTheme.subtleWellFill(colorScheme).opacity(isPressed ? 0.9 : 0.45))
-                .padding(.horizontal, 14)
-        )
-        .scaleEffect(isPressed ? 0.98 : 1.0)
-        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isPressed)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(MirageTheme.subtleWellFill(colorScheme).opacity(0.6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                )
         )
     }
 
@@ -174,9 +184,31 @@ private struct WindowRow: View {
         if let data = window.appIconData, let img = UIImage(data: data) {
             Image(uiImage: img).resizable().scaledToFit()
         } else {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(MirageTheme.subtleWellFill(colorScheme))
-                .overlay(Image(systemName: "macwindow").foregroundStyle(.secondary))
+                .overlay(
+                    Image(systemName: "macwindow")
+                        .font(.system(size: 24, weight: .thin))
+                        .foregroundStyle(Color.primary.opacity(0.4))
+                )
         }
+    }
+}
+
+// MARK: - Button style
+//
+// Press feedback via `ButtonStyleConfiguration.isPressed` so we can drop the
+// previous `simultaneousGesture(DragGesture(minimumDistance: 0))` hack.
+// That hack was the reason taps weren't reaching `onPick` — it intercepted
+// the sheet's gesture pipeline and either swallowed the press or blocked
+// the scroll, depending on platform.
+
+private struct WindowCellButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.9 : 1.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.7),
+                       value: configuration.isPressed)
     }
 }

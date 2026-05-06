@@ -69,11 +69,13 @@ final class ScreenCaptureService {
         }
     }
 
-    deinit {
-        if let contentObserver {
-            NotificationCenter.default.removeObserver(contentObserver)
-        }
-    }
+    // No `deinit` here on purpose. `ScreenCaptureService` is a process-lifetime
+    // singleton (`static let shared`), so a deinit would never run anyway.
+    // Beyond being dead code, an explicit `deinit` would force us to access
+    // the non-Sendable `contentObserver` from a nonisolated deinit, which
+    // Swift 6 strict concurrency rejects. Keeping `contentObserver` alive on
+    // the singleton is exactly what we want: the observation should fire for
+    // the life of the process.
 
     /// Triggers the system Screen Recording prompt by touching `SCShareableContent`.
     /// Call this once at launch so the dialog appears before the user actually
