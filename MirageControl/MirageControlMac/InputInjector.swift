@@ -40,20 +40,26 @@ final class InputInjector {
     /// The iPad applies user-chosen sensitivity before sending; the host
     /// adds a subtle acceleration curve so small movements stay precise
     /// while large swipes cover more distance — matching macOS trackpad feel.
+    ///
+    /// The cursor moves freely across every connected display: instead of
+    /// clamping to `CGMainDisplayID()`'s bounds we clamp to the union of
+    /// `NSScreen.screens`. When the cursor is between two displays we keep
+    /// it inside whichever one currently contains it, which is what AppKit
+    /// itself does when you push a real mouse off one screen.
     func moveCursor(dx: Float, dy: Float) {
         guard isAccessibilityGranted else { return }
         let currentPos = NSEvent.mouseLocation
-        // NSEvent y is flipped relative to CGDisplayBounds
-        let screenHeight = NSScreen.main?.frame.height ?? 900
-        let cgCurrent = CGPoint(x: currentPos.x,
-                                y: screenHeight - currentPos.y)
+        // NSEvent y is flipped relative to CGDisplayBounds. We flip using
+        // the *global* frame's max-y so the conversion still works on
+        // multi-display setups where the main display isn't at the top.
+        let cgCurrent = Self.flipNSPointToCG(currentPos)
 
         let accelDx = applyAcceleration(dx)
         let accelDy = applyAcceleration(dy)
 
         let next = CGPoint(x: cgCurrent.x + Double(accelDx),
                            y: cgCurrent.y + Double(accelDy))
-        let clamped = clamp(next)
+        let clamped = clampToScreens(next, current: cgCurrent)
         let event = CGEvent(mouseEventSource: nil,
                             mouseType: .mouseMoved,
                             mouseCursorPosition: clamped,
@@ -74,15 +80,57 @@ final class InputInjector {
     // MARK: - Scroll
 
     func scroll(dx: Float, dy: Float) {
+        scroll(dx: dx, dy: dy, phase: .changed)
+    }
+
+    /// Scroll-phase-aware send so AppKit / WebKit / SwiftUI scroll views
+    /// see continuous scroll gestures rather than a stream of un-phased
+    /// wheel ticks. The iPad uses this for the begin/end transitions; the
+    /// trackpad's "natural" rubber-banding and momentum continuation only
+    /// kicks in when these phases are present.
+    func scroll(dx: Float, dy: Float, phase: ScrollPhase) {
         guard isAccessibilityGranted else { return }
         // scrollWheel: unit=pixel, axis1=vertical, axis2=horizontal
-        let event = CGEvent(scrollWheelEvent2Source: nil,
-                            units: .pixel,
-                            wheelCount: 2,
-                            wheel1: Int32(-dy * 3),
-                            wheel2: Int32(-dx * 3),
-                            wheel3: 0)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: Int32(-dy * 3),
+            wheel2: Int32(-dx * 3),
+            wheel3: 0
+        ) else { return }
+
+        // Continuous scroll bit must be set so AppKit treats the deltas as
+        // pixel-precise (trackpad style), not line-step (mouse-wheel style).
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+
+        switch phase {
+        case .begin:
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: 1)   // kCGScrollPhaseBegan
+        case .changed:
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: 2)   // kCGScrollPhaseChanged
+        case .end:
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: 4)   // kCGScrollPhaseEnded
+        case .momentumBegin:
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 1) // kCGMomentumScrollPhaseBegin
+        case .momentumChanged:
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 2) // kCGMomentumScrollPhaseContinue
+        case .momentumEnd:
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 3) // kCGMomentumScrollPhaseEnd
+        }
+
+        event.post(tap: .cghidEventTap)
+    }
+
+    /// Phases recognized by `scroll(dx:dy:phase:)`. Mirrors AppKit's
+    /// `NSEvent.Phase` / momentum phases without dragging in AppKit types.
+    enum ScrollPhase: Sendable {
+        case begin
+        case changed
+        case end
+        case momentumBegin
+        case momentumChanged
+        case momentumEnd
     }
 
     // MARK: - Clicks
@@ -212,16 +260,79 @@ final class InputInjector {
     // MARK: - Helpers
 
     private func currentCGCursorPosition() -> CGPoint {
-        let pos = NSEvent.mouseLocation
-        let screenHeight = NSScreen.main?.frame.height ?? 900
-        return CGPoint(x: pos.x, y: screenHeight - pos.y)
+        Self.flipNSPointToCG(NSEvent.mouseLocation)
     }
 
-    private func clamp(_ point: CGPoint) -> CGPoint {
-        let screen = CGDisplayBounds(CGMainDisplayID())
-        let x = max(screen.minX, min(screen.maxX - 1, point.x))
-        let y = max(screen.minY, min(screen.maxY - 1, point.y))
-        return CGPoint(x: x, y: y)
+    /// Converts an AppKit (origin-bottom-left, multi-screen-aware) point to
+    /// a CGEvent (origin-top-left) point.
+    private static func flipNSPointToCG(_ point: CGPoint) -> CGPoint {
+        // Use the union of all displays so the conversion stays correct
+        // regardless of which screen the cursor happens to be on.
+        let unionMaxY = NSScreen.screens
+            .map(\.frame.maxY)
+            .max() ?? (NSScreen.main?.frame.maxY ?? 900)
+        return CGPoint(x: point.x, y: unionMaxY - point.y)
+    }
+
+    /// Clamps `point` to the *combined* screen real estate. We don't pin
+    /// the cursor to whichever display happens to contain it because then
+    /// the user could never cross from one screen to another. Instead we
+    /// snap to the closest valid pixel inside the union of screen frames.
+    private func clampToScreens(_ point: CGPoint, current: CGPoint) -> CGPoint {
+        let screens = Self.cgDisplayFrames()
+        guard !screens.isEmpty else {
+            // No screens? Just return the point verbatim — CGEvent will
+            // clamp it itself.
+            return point
+        }
+
+        // Fast path: still inside a screen → no clamping required.
+        if screens.contains(where: { $0.contains(point) }) {
+            return point
+        }
+
+        // Otherwise find the nearest point on any screen. This keeps the
+        // cursor crawling along the union edge instead of teleporting.
+        var bestPoint = point
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for frame in screens {
+            let candidate = Self.clampPoint(point, to: frame)
+            let dx = candidate.x - point.x
+            let dy = candidate.y - point.y
+            let distance = dx * dx + dy * dy
+            if distance < bestDistance {
+                bestDistance = distance
+                bestPoint = candidate
+            }
+        }
+        // Subtract 1 from max edges so the cursor isn't pushed off-screen
+        // by floating-point rounding when the user pegs against a corner.
+        return bestPoint
+    }
+
+    private static func clampPoint(_ point: CGPoint, to frame: CGRect) -> CGPoint {
+        CGPoint(
+            x: max(frame.minX, min(frame.maxX - 1, point.x)),
+            y: max(frame.minY, min(frame.maxY - 1, point.y))
+        )
+    }
+
+    /// Returns each connected display's bounds in CGEvent coordinates
+    /// (origin top-left). Falls back to `CGMainDisplayID()` if Quartz
+    /// returns no displays — should never happen on a Mac with a screen,
+    /// but defensive coding doesn't hurt the hot path.
+    private static func cgDisplayFrames() -> [CGRect] {
+        var displayCount: UInt32 = 0
+        var result = CGGetActiveDisplayList(0, nil, &displayCount)
+        guard result == .success, displayCount > 0 else {
+            return [CGDisplayBounds(CGMainDisplayID())]
+        }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+        result = CGGetActiveDisplayList(displayCount, &ids, &displayCount)
+        guard result == .success else {
+            return [CGDisplayBounds(CGMainDisplayID())]
+        }
+        return ids.prefix(Int(displayCount)).map(CGDisplayBounds)
     }
 
     private func cgMouseTypes(for button: MouseButton) -> (CGEventType, CGEventType, CGMouseButton) {

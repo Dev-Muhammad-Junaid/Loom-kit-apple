@@ -45,6 +45,9 @@ struct TrackpadView: View {
                         onScrollDelta: { dx, dy in
                             Task { await sender.sendScroll(dx: dx, dy: dy) }
                         },
+                        onScrollEnded: {
+                            Task { await sender.endScroll() }
+                        },
                         onThreeFingerSwipe: { direction in
                             Task { await sender.sendThreeFingerSwipe(direction) }
                         },
@@ -254,6 +257,12 @@ struct GestureButtonBar: View {
             }
             GestureButton(label: "Double Click", icon: "cursorarrow.click.badge.clock",  color: MirageTheme.indigo, haptic: .double, colorScheme: colorScheme) {
                 Task { await sender.sendDoubleClick(.left) }
+            }
+            // Locate / Find Cursor — pulses a violet crosshair on whichever
+            // Mac display currently holds the cursor. Helpful on multi-display
+            // setups when the cursor is buried off-screen for the iPad user.
+            GestureButton(label: "Locate", icon: "scope", color: MirageTheme.violet, haptic: .selection, colorScheme: colorScheme) {
+                Task { await sender.locateCursor() }
             }
             GestureButton(label: "Mission", icon: "macwindow.on.rectangle", color: MirageTheme.sky, haptic: .light, colorScheme: colorScheme) {
                 Task { await sender.sendMacro("missioncontrol_trigger") }

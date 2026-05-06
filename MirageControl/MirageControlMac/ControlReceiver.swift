@@ -53,8 +53,8 @@ final class ControlReceiver {
         case let .mouseDelta(dx, dy):
             injector.moveCursor(dx: dx, dy: dy)
 
-        case let .mouseScroll(dx, dy):
-            injector.scroll(dx: dx, dy: dy)
+        case let .mouseScroll(dx, dy, phase):
+            injector.scroll(dx: dx, dy: dy, phase: Self.injectorPhase(for: phase))
 
         case let .mouseClick(button):
             injector.click(button: button)
@@ -87,8 +87,11 @@ final class ControlReceiver {
             default: break
             }
             
-        case let .requestScreenshot(requestID):
-            await handleScreenshotRequest(requestID: requestID, handle: handle)
+        case let .requestScreenshot(requestID, mode):
+            await handleScreenshotRequest(requestID: requestID, mode: mode, handle: handle)
+
+        case let .requestWindowList(requestID):
+            await handleWindowListRequest(requestID: requestID, handle: handle)
 
         case .requestAppList:
             await handleAppListRequest(handle: handle)
@@ -101,7 +104,7 @@ final class ControlReceiver {
 
         case .authorizationStatus:
             break
-        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse, .runningAppsUpdate, .uiContextUpdate:
+        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse, .runningAppsUpdate, .uiContextUpdate, .windowListResponse:
             // Client-bound messages; host doesn't process them locally
             break
         }
@@ -118,19 +121,40 @@ final class ControlReceiver {
 
     // MARK: - Screenshot Capture
 
-    /// Captures the main display via ScreenCaptureKit and sends the JPEG back,
+    /// Captures the requested slice of the screen and sends it back as JPEG,
     /// or sends a descriptive `screenshotError` so the iPad can dismiss its
-    /// spinner and show a useful message. The `requestID` is echoed verbatim
-    /// so the iPad can drop responses belonging to a timed-out earlier tap.
-    private func handleScreenshotRequest(requestID: String, handle: LoomConnectionHandle) async {
+    /// spinner and show a useful message. `requestID` is echoed verbatim so
+    /// the iPad can drop responses belonging to a timed-out earlier tap.
+    private func handleScreenshotRequest(
+        requestID: String,
+        mode: CaptureMode,
+        handle: LoomConnectionHandle
+    ) async {
         do {
-            let jpeg = try await ScreenCaptureService.shared.captureMainDisplayJPEG()
+            let jpeg: Data
+            switch mode {
+            case .fullScreen:
+                jpeg = try await ScreenCaptureService.shared.captureMainDisplayJPEG()
+            case let .region(x, y, width, height):
+                let rect = CGRect(
+                    x: CGFloat(x),
+                    y: CGFloat(y),
+                    width: CGFloat(width),
+                    height: CGFloat(height)
+                )
+                jpeg = try await ScreenCaptureService.shared.captureRegionJPEG(normalizedRect: rect)
+            case let .window(windowID):
+                jpeg = try await ScreenCaptureService.shared.captureWindowJPEG(windowID: windowID)
+            }
             try await handle.send(.screenshotData(requestID: requestID, data: jpeg))
         } catch ScreenCaptureService.CaptureError.permissionDenied {
             await sendError(requestID: requestID, to: handle,
                             message: "Screen Recording permission required. Please allow MirageControl in System Settings > Privacy & Security > Screen Recording, then try again.")
         } catch ScreenCaptureService.CaptureError.noDisplay {
             await sendError(requestID: requestID, to: handle, message: "Display capture failed. No displays found.")
+        } catch ScreenCaptureService.CaptureError.windowNotFound {
+            await sendError(requestID: requestID, to: handle,
+                            message: "That window has closed. Refresh the window list and try again.")
         } catch ScreenCaptureService.CaptureError.captureFailed(let detail) {
             await sendError(requestID: requestID, to: handle, message: "Capture failed: \(detail)")
         } catch ScreenCaptureService.CaptureError.encodeFailed {
@@ -141,6 +165,22 @@ final class ControlReceiver {
         }
     }
 
+    private func handleWindowListRequest(requestID: String, handle: LoomConnectionHandle) async {
+        do {
+            let windows = try await ScreenCaptureService.shared.enumerateWindows()
+            try await handle.send(.windowListResponse(requestID: requestID, windows: windows))
+        } catch {
+            // Window enumeration failures share the same TCC requirement as
+            // capture, so route them through the same error channel — the
+            // iPad already knows how to surface this copy.
+            await sendError(
+                requestID: requestID,
+                to: handle,
+                message: "Couldn't read window list: \(error.localizedDescription)"
+            )
+        }
+    }
+
     private func sendError(requestID: String, to handle: LoomConnectionHandle, message: String) async {
         try? await handle.send(.screenshotError(requestID: requestID, message: message))
     }
@@ -148,6 +188,9 @@ final class ControlReceiver {
     private func dispatchMacro(id: String) async {
         // System-level triggers that can't be done via CGEvent keyboard shortcuts
         switch id {
+        case "locate_cursor":
+            CursorLocator.shared.ping()
+            return
         case "missioncontrol_trigger":
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
@@ -207,5 +250,19 @@ final class ControlReceiver {
         ActiveAppMonitor.shared.removeConnection(id: id)
         RunningAppMonitor.shared.removeConnection(id: id)
         ContextObserver.shared.removeConnection(id: id)
+    }
+
+    /// Bridge from the Shared wire enum to the Mac-internal `InputInjector`
+    /// phase. We keep them as separate types so the iOS target doesn't
+    /// pull in `InputInjector` and the Mac internals stay free to evolve.
+    private static func injectorPhase(for phase: ScrollPhase) -> InputInjector.ScrollPhase {
+        switch phase {
+        case .begin:           return .begin
+        case .changed:         return .changed
+        case .end:             return .end
+        case .momentumBegin:   return .momentumBegin
+        case .momentumChanged: return .momentumChanged
+        case .momentumEnd:     return .momentumEnd
+        }
     }
 }
