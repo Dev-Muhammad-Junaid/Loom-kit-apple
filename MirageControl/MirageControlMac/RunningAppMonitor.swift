@@ -71,10 +71,12 @@ final class RunningAppMonitor {
     // MARK: - Event handlers
 
     private func seedFromCurrentlyRunning() {
-        // Running apps already sorted frontmost-first: put `frontmostApplication`
-        // at index 0, then everything else in launch order as a reasonable
-        // approximation — activation events will fix up the order as the user
-        // Cmd-Tabs around.
+        // Best-effort initial seed. `NSWorkspace.runningApplications` does
+        // NOT guarantee Cmd+Tab order — that ordering only exists in private
+        // Launch Services API. We pin `frontmostApplication` at index 0 so
+        // the iPad's app switcher menu has *something* sensible at startup,
+        // and let `didActivateApplicationNotification` events fix up the
+        // tail as the user moves around.
         let frontID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         var ids: [String] = []
         if let frontID { ids.append(frontID) }
@@ -122,7 +124,6 @@ final class RunningAppMonitor {
     }
 
     private func send(_ bundleIDs: [String], to handle: LoomConnectionHandle) async throws {
-        let msg = ControlMessage.runningAppsUpdate(bundleIDs: bundleIDs)
-        try await handle.send(JSONEncoder().encode(msg))
+        try await handle.send(.runningAppsUpdate(bundleIDs: bundleIDs))
     }
 }

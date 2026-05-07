@@ -21,6 +21,7 @@ struct ScreenshotPreviewView: View {
     @State private var isSaving = false
     @State private var toastTask: Task<Void, Never>?
     @State private var showAnnotationView = false
+    @State private var showOCRView = false
     // Holds the annotated version once the user finishes annotating;
     // all Save/Copy/Share actions use this instead of the original.
     @State private var annotatedImage: UIImage?
@@ -79,14 +80,6 @@ struct ScreenshotPreviewView: View {
             // Top bar
             VStack {
                 HStack {
-                    // Mac display dimensions badge
-                    Text("\(Int(image.size.width * image.scale)) × \(Int(image.size.height * image.scale))")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(.white.opacity(0.1)))
-
                     if annotatedImage != nil {
                         Text("Annotated")
                             .font(.system(size: 10, weight: .semibold))
@@ -166,6 +159,20 @@ struct ScreenshotPreviewView: View {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         showAnnotationView = true
                     }
+
+                    // Runs Vision OCR on whatever image is currently showing
+                    // — the cropped region, the full screen, or the window.
+                    // The user asked for this specifically on region grabs;
+                    // exposing it on every preview costs nothing extra and
+                    // keeps the action row uniform.
+                    ActionButton(
+                        icon: "text.viewfinder",
+                        label: "Text",
+                        color: .white
+                    ) {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        showOCRView = true
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -178,6 +185,14 @@ struct ScreenshotPreviewView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: [annotatedImage ?? image])
+        }
+        .sheet(isPresented: $showOCRView) {
+            // Run OCR against the annotated image when present — text drawn
+            // on top is text the user might want to capture too — falling
+            // back to the original capture otherwise.
+            OCRResultView(image: annotatedImage ?? image) {
+                showOCRView = false
+            }
         }
         .fullScreenCover(isPresented: $showAnnotationView) {
             AnnotationView(image: annotatedImage ?? image) { result in
@@ -223,8 +238,20 @@ struct ScreenshotPreviewView: View {
 
         // Use the annotated version if one exists, otherwise the original.
         // Convert to Data (Sendable) before crossing the @Sendable closure boundary.
+        //
+        // Windowed screenshots come through as PNGs with the macOS-native
+        // shadow halo encoded as transparent pixels. JPEG would flatten that
+        // halo to white on save, which throws away the whole reason we're
+        // capturing windows separately. Keep JPEG for fully-opaque captures
+        // (full screen + region) so the saved file stays compact.
         let imageToSave = annotatedImage ?? image
-        guard let imgData = imageToSave.jpegData(compressionQuality: 0.92) else {
+        let imgData: Data?
+        if Self.imageHasAlpha(imageToSave) {
+            imgData = imageToSave.pngData()
+        } else {
+            imgData = imageToSave.jpegData(compressionQuality: 0.92)
+        }
+        guard let imgData else {
             await showToast("Save failed: could not encode image")
             return
         }
@@ -245,6 +272,21 @@ struct ScreenshotPreviewView: View {
         withAnimation { toastMessage = message }
         try? await Task.sleep(nanoseconds: 2_500_000_000)
         withAnimation { toastMessage = nil }
+    }
+
+    /// `true` when the underlying CGImage carries any kind of real alpha
+    /// channel. Used to choose between PNG and JPEG on Save-to-Photos so
+    /// windowed shots keep their transparent shadow halo.
+    private static func imageHasAlpha(_ image: UIImage) -> Bool {
+        guard let cg = image.cgImage else { return false }
+        switch cg.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return false
+        case .premultipliedFirst, .premultipliedLast, .first, .last, .alphaOnly:
+            return true
+        @unknown default:
+            return true
+        }
     }
 }
 

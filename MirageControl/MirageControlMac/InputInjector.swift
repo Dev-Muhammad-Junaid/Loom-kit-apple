@@ -37,26 +37,32 @@ final class InputInjector {
     // MARK: - Mouse movement
 
     /// Moves the cursor by a relative delta (in points).
+    ///
     /// The iPad applies user-chosen sensitivity before sending; the host
     /// adds a subtle acceleration curve so small movements stay precise
     /// while large swipes cover more distance — matching macOS trackpad feel.
+    ///
+    /// We let macOS handle every aspect of multi-display routing. No local
+    /// clamping, no synthetic delta fields — just a clean absolute-position
+    /// `mouseMoved` event. macOS clips out-of-bounds coordinates at the HID
+    /// layer on its own, so the cursor moves freely across every connected
+    /// display without us doing anything extra.
     func moveCursor(dx: Float, dy: Float) {
         guard isAccessibilityGranted else { return }
         let currentPos = NSEvent.mouseLocation
-        // NSEvent y is flipped relative to CGDisplayBounds
-        let screenHeight = NSScreen.main?.frame.height ?? 900
-        let cgCurrent = CGPoint(x: currentPos.x,
-                                y: screenHeight - currentPos.y)
+        // NSEvent y is flipped relative to CGDisplayBounds. We flip using
+        // the *global* frame's max-y so the conversion stays correct on
+        // multi-display setups where the main display isn't at the top.
+        let cgCurrent = Self.flipNSPointToCG(currentPos)
 
         let accelDx = applyAcceleration(dx)
         let accelDy = applyAcceleration(dy)
 
         let next = CGPoint(x: cgCurrent.x + Double(accelDx),
                            y: cgCurrent.y + Double(accelDy))
-        let clamped = clamp(next)
         let event = CGEvent(mouseEventSource: nil,
                             mouseType: .mouseMoved,
-                            mouseCursorPosition: clamped,
+                            mouseCursorPosition: next,
                             mouseButton: .left)
         event?.post(tap: .cghidEventTap)
     }
@@ -74,15 +80,57 @@ final class InputInjector {
     // MARK: - Scroll
 
     func scroll(dx: Float, dy: Float) {
+        scroll(dx: dx, dy: dy, phase: .changed)
+    }
+
+    /// Scroll-phase-aware send so AppKit / WebKit / SwiftUI scroll views
+    /// see continuous scroll gestures rather than a stream of un-phased
+    /// wheel ticks. The iPad uses this for the begin/end transitions; the
+    /// trackpad's "natural" rubber-banding and momentum continuation only
+    /// kicks in when these phases are present.
+    func scroll(dx: Float, dy: Float, phase: ScrollPhase) {
         guard isAccessibilityGranted else { return }
         // scrollWheel: unit=pixel, axis1=vertical, axis2=horizontal
-        let event = CGEvent(scrollWheelEvent2Source: nil,
-                            units: .pixel,
-                            wheelCount: 2,
-                            wheel1: Int32(-dy * 3),
-                            wheel2: Int32(-dx * 3),
-                            wheel3: 0)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: Int32(-dy * 3),
+            wheel2: Int32(-dx * 3),
+            wheel3: 0
+        ) else { return }
+
+        // Continuous scroll bit must be set so AppKit treats the deltas as
+        // pixel-precise (trackpad style), not line-step (mouse-wheel style).
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+
+        switch phase {
+        case .begin:
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: 1)   // kCGScrollPhaseBegan
+        case .changed:
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: 2)   // kCGScrollPhaseChanged
+        case .end:
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: 4)   // kCGScrollPhaseEnded
+        case .momentumBegin:
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 1) // kCGMomentumScrollPhaseBegin
+        case .momentumChanged:
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 2) // kCGMomentumScrollPhaseContinue
+        case .momentumEnd:
+            event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 3) // kCGMomentumScrollPhaseEnd
+        }
+
+        event.post(tap: .cghidEventTap)
+    }
+
+    /// Phases recognized by `scroll(dx:dy:phase:)`. Mirrors AppKit's
+    /// `NSEvent.Phase` / momentum phases without dragging in AppKit types.
+    enum ScrollPhase: Sendable {
+        case begin
+        case changed
+        case end
+        case momentumBegin
+        case momentumChanged
+        case momentumEnd
     }
 
     // MARK: - Clicks
@@ -212,16 +260,18 @@ final class InputInjector {
     // MARK: - Helpers
 
     private func currentCGCursorPosition() -> CGPoint {
-        let pos = NSEvent.mouseLocation
-        let screenHeight = NSScreen.main?.frame.height ?? 900
-        return CGPoint(x: pos.x, y: screenHeight - pos.y)
+        Self.flipNSPointToCG(NSEvent.mouseLocation)
     }
 
-    private func clamp(_ point: CGPoint) -> CGPoint {
-        let screen = CGDisplayBounds(CGMainDisplayID())
-        let x = max(screen.minX, min(screen.maxX - 1, point.x))
-        let y = max(screen.minY, min(screen.maxY - 1, point.y))
-        return CGPoint(x: x, y: y)
+    /// Converts an AppKit (origin-bottom-left, multi-screen-aware) point to
+    /// a CGEvent (origin-top-left) point.
+    private static func flipNSPointToCG(_ point: CGPoint) -> CGPoint {
+        // Use the union of all displays so the conversion stays correct
+        // regardless of which screen the cursor happens to be on.
+        let unionMaxY = NSScreen.screens
+            .map(\.frame.maxY)
+            .max() ?? (NSScreen.main?.frame.maxY ?? 900)
+        return CGPoint(x: point.x, y: unionMaxY - point.y)
     }
 
     private func cgMouseTypes(for button: MouseButton) -> (CGEventType, CGEventType, CGMouseButton) {

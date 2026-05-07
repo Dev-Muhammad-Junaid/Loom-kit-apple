@@ -76,12 +76,11 @@ struct ContentRootView: View {
         .animation(.easeInOut(duration: 0.28), value: activeConnection != nil)
         .task {
             do {
-                print("MirageControliOS: 🚀 Attempting to start LoomContext...")
+                MirageLog.app.info("Starting LoomContext")
                 try await loomContext.start()
-                print("MirageControliOS: ✅ LoomContext started successfully!")
+                MirageLog.app.info("LoomContext started")
             } catch {
-                print("MirageControliOS: ❌ FATAL ERROR starting LoomContext: \(error)")
-                print("MirageControliOS: Error Description: \(error.localizedDescription)")
+                MirageLog.app.fault("LoomContext start failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

@@ -29,6 +29,11 @@ struct TrackpadCallbacks {
     var onCursorDelta: (Float, Float) -> Void = { _, _ in }
     /// Continuous delta during 2-finger drag (scroll).
     var onScrollDelta: (Float, Float) -> Void = { _, _ in }
+    /// Fired once all fingers driving an active scroll gesture lift, so
+    /// the host can ship `ScrollPhase.end` to the Mac. Required for AppKit's
+    /// rubber-banding + momentum animations to play out instead of just
+    /// stopping abruptly.
+    var onScrollEnded: () -> Void = { }
     /// Fired once when a 3-finger directional swipe is recognized.
     var onThreeFingerSwipe: (TrackpadGestureKind.ThreeFingerDirection) -> Void = { _ in }
     /// 1-finger tap (fast touch < 0.3s with < 6pt movement).
@@ -88,6 +93,11 @@ final class TouchTrackingView: UIView {
     private var threeFingerOrigin: CGPoint?
     private var threeFingerFired = false
 
+    /// `true` while a scroll gesture (1-finger scrollMode or 2-finger drag)
+    /// is in flight. Drives `onScrollEnded` so the host can ship a phased
+    /// `.end` event when the driving fingers lift.
+    private var scrollActive = false
+
     // Pre-allocated haptics
     private let mediumHaptic = UIImpactFeedbackGenerator(style: .medium)
     private let heavyHaptic = UIImpactFeedbackGenerator(style: .heavy)
@@ -116,11 +126,17 @@ final class TouchTrackingView: UIView {
             mediumHaptic.prepare()
             heavyHaptic.prepare()
 
-            // Schedule long press (right-click)
+            // Schedule long press (right-click). Re-validate touch state after
+            // the sleep so a second finger landing within the 400 ms window
+            // (or the user dragging past the dead zone) doesn't race against
+            // the timer and synthesize a phantom right-click.
             longPressTimer?.cancel()
             longPressTimer = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 400_000_000)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled,
+                      self.activeTouches.count == 1,
+                      !self.hasMoved
+                else { return }
                 self.longPressFired = true
                 self.heavyHaptic.impactOccurred()
                 self.callbacks.onLongPress(loc)
@@ -170,6 +186,7 @@ final class TouchTrackingView: UIView {
             // 1-finger: cursor OR scroll depending on mode
             if hasMoved {
                 if scrollMode {
+                    scrollActive = true
                     callbacks.onScrollDelta(dx * 0.5, dy * 0.5)
                     callbacks.onGestureChanged(.scroll)
                 } else {
@@ -180,6 +197,7 @@ final class TouchTrackingView: UIView {
 
         case 2:
             // Scroll — gentler multiplier
+            scrollActive = true
             callbacks.onScrollDelta(dx * 0.5, dy * 0.5)
             callbacks.onGestureChanged(.scroll)
 
@@ -219,6 +237,14 @@ final class TouchTrackingView: UIView {
         if activeTouches.isEmpty {
             longPressTimer?.cancel()
 
+            // If a scroll gesture was in flight, surface the `.end` phase to
+            // the host before resetting state. AppKit's scroll views need
+            // this transition to drive their rubber-banding back to rest.
+            if scrollActive {
+                scrollActive = false
+                callbacks.onScrollEnded()
+            }
+
             // 1-finger tap detection — only if long press didn't already fire
             if wasCount == 1 && !hasMoved && !longPressFired {
                 let duration = CACurrentMediaTime() - touchDownTime
@@ -256,6 +282,10 @@ final class TouchTrackingView: UIView {
         activeTouches.removeAll { touches.contains($0) }
         if activeTouches.isEmpty {
             longPressTimer?.cancel()
+            if scrollActive {
+                scrollActive = false
+                callbacks.onScrollEnded()
+            }
             lastCentroid = nil
             threeFingerOrigin = nil
             threeFingerFired = false

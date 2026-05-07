@@ -11,7 +11,6 @@ import QuartzCore
 /// Tuned for buttery-smooth 120 Hz trackpad input on iPad Pro (ProMotion).
 actor TrackpadSender {
     private let handle: LoomConnectionHandle
-    private let encoder = JSONEncoder()
 
     // ── Timing ──────────────────────────────────────────────────────
     // 120 Hz matches iPad Pro's ProMotion refresh rate so no touch
@@ -35,6 +34,10 @@ actor TrackpadSender {
     private var pendingScrollDX: Float = 0
     private var pendingScrollDY: Float = 0
     private var isScrollSendScheduled: Bool = false
+    /// Tracks whether we're inside an active scroll gesture so the host
+    /// receives a single `.begin` followed by `.changed` ticks. The next
+    /// `.changed` flips this back to false on `endScroll(...)`.
+    private var inScrollGesture: Bool = false
 
     init(handle: LoomConnectionHandle) {
         self.handle = handle
@@ -105,7 +108,36 @@ actor TrackpadSender {
         pendingScrollDY = 0
         lastScrollSentAt = CACurrentMediaTime()
 
-        await send(.mouseScroll(dx: dx, dy: dy))
+        // The first delta inside a gesture goes out with `.begin`; every
+        // subsequent delta is `.changed` until the iPad surfaces a finger
+        // lift via `endScroll(...)`.
+        let phase: ScrollPhase
+        if inScrollGesture {
+            phase = .changed
+        } else {
+            phase = .begin
+            inScrollGesture = true
+        }
+        await send(.mouseScroll(dx: dx, dy: dy, phase: phase))
+    }
+
+    /// Called when the iPad detects the scroll-driving fingers have lifted.
+    /// We flush any pending delta first so the `.end` event lands after the
+    /// last real movement, then mark the gesture closed.
+    func endScroll(momentumDX: Float = 0, momentumDY: Float = 0) async {
+        if pendingScrollDX != 0 || pendingScrollDY != 0 {
+            await flushScroll()
+        }
+        if inScrollGesture {
+            await send(.mouseScroll(dx: 0, dy: 0, phase: .end))
+            inScrollGesture = false
+        }
+        // If the iPad reports residual velocity (true momentum), let the
+        // host know so AppKit's scroll views can run their decay animation.
+        if momentumDX != 0 || momentumDY != 0 {
+            await send(.mouseScroll(dx: momentumDX, dy: momentumDY, phase: .momentumBegin))
+            await send(.mouseScroll(dx: 0, dy: 0, phase: .momentumEnd))
+        }
     }
 
     // MARK: - Immediate sends (clicks, shortcuts, etc.)
@@ -154,8 +186,25 @@ actor TrackpadSender {
         await send(.triggerContextAction(id: id))
     }
 
-    func requestScreenshot() async {
-        await send(.requestScreenshot)
+    /// Issues a screenshot request tagged with `requestID` so the iPad can
+    /// reject responses that belong to a previous, timed-out request.
+    /// `mode` defaults to full-screen so callers that don't care about
+    /// region/window capture stay one-liner.
+    func requestScreenshot(requestID: String, mode: CaptureMode = .fullScreen) async {
+        await send(.requestScreenshot(requestID: requestID, mode: mode))
+    }
+
+    /// Asks the Mac to enumerate visible windows so the iPad can present a
+    /// picker before issuing a `.window(windowID:)` capture.
+    func requestWindowList(requestID: String) async {
+        await send(.requestWindowList(requestID: requestID))
+    }
+
+    /// Briefly highlights the Mac cursor's current location with an animated
+    /// crosshair overlay. No-op on Macs running an older host that doesn't
+    /// recognize the macro id (silently dropped server-side).
+    func locateCursor() async {
+        await send(.macroButton(id: "locate_cursor"))
     }
 
     func requestAppList() async {
@@ -177,7 +226,6 @@ actor TrackpadSender {
     // MARK: - Core send
 
     private func send(_ message: ControlMessage) async {
-        guard let data = try? encoder.encode(message) else { return }
-        try? await handle.send(data)
+        try? await handle.send(message)
     }
 }

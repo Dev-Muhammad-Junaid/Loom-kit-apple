@@ -456,27 +456,77 @@ final class ContextObserver {
             return .none
         }
 
+        // Build deterministic IDs derived purely from dialog content. This
+        // is what keeps `updateSnapshot`'s `snapshot != latestSnapshot`
+        // dedupe meaningful: two AX recomputes that find the same dialog
+        // produce equal `DialogContext`s and the iPad isn't re-pushed.
+        //
+        // Format: `<revision>|<index>|<title>` so a button's identity is
+        // tied to the exact dialog instance — when the dialog content
+        // changes, every button gets a fresh ID and any in-flight tap
+        // referencing the previous revision is correctly rejected.
         var table: [String: AXUIElement] = [:]
-        var buttons: [DialogButton] = []
+        var protoButtons: [(title: String, isDefault: Bool, isCancel: Bool, elem: AXUIElement)] = []
+        protoButtons.reserveCapacity(raw.count)
         for (elem, btnTitle) in raw {
-            let id = UUID().uuidString
-            table[id] = elem
-            buttons.append(DialogButton(
-                id: id,
+            protoButtons.append((
                 title: btnTitle,
                 isDefault: defaultBtn.map { CFEqual(elem, $0) } ?? false,
-                isCancel: cancelBtn.map { CFEqual(elem, $0) } ?? false
+                isCancel: cancelBtn.map { CFEqual(elem, $0) } ?? false,
+                elem: elem
+            ))
+        }
+
+        let revision = makeDialogRevision(
+            title: title,
+            message: message,
+            buttons: protoButtons.map { ($0.title, $0.isDefault, $0.isCancel) }
+        )
+
+        var buttons: [DialogButton] = []
+        for (index, proto) in protoButtons.enumerated() {
+            let id = "\(revision)|\(index)|\(proto.title)"
+            table[id] = proto.elem
+            buttons.append(DialogButton(
+                id: id,
+                title: proto.title,
+                isDefault: proto.isDefault,
+                isCancel: proto.isCancel
             ))
         }
 
         store(table)
 
         return .dialog(DialogContext(
-            revision: UUID().uuidString,
+            revision: revision,
             title: title,
             message: message,
             buttons: buttons
         ))
+    }
+
+    /// Stable revision string derived purely from dialog content. Two AX
+    /// recomputes that find the same dialog yield the same revision, so
+    /// `DialogContext` equality holds and `updateSnapshot` dedupes them.
+    /// We cap at a handful of fields because the AX tree above this point
+    /// has already filtered down to "real dialog content".
+    private static func makeDialogRevision(
+        title: String?,
+        message: String?,
+        buttons: [(title: String, isDefault: Bool, isCancel: Bool)]
+    ) -> String {
+        var hasher = Hasher()
+        hasher.combine(title ?? "")
+        hasher.combine(message ?? "")
+        for button in buttons {
+            hasher.combine(button.title)
+            hasher.combine(button.isDefault)
+            hasher.combine(button.isCancel)
+        }
+        let hashed = hasher.finalize()
+        // Hex so the revision string is predictable in length and shape;
+        // length doesn't matter for equality but helps when reading logs.
+        return String(format: "%016x", UInt64(bitPattern: Int64(hashed)))
     }
 
     // MARK: - Debug
@@ -771,7 +821,6 @@ final class ContextObserver {
     // MARK: - Send
 
     private func send(_ snapshot: UIContextSnapshot, to handle: LoomConnectionHandle) async throws {
-        let msg = ControlMessage.uiContextUpdate(snapshot: snapshot)
-        try await handle.send(JSONEncoder().encode(msg))
+        try await handle.send(.uiContextUpdate(snapshot: snapshot))
     }
 }

@@ -2,32 +2,35 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- AppleScript bridge for Mission Control / App Exposé triggers in
+	     ControlReceiver.dispatchMacro. Required to send key events via
+	     `tell application "System Events" ...`. -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+
+	<!-- Convenience for hardened-runtime debugging. Inert at runtime. -->
 	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
 	<true/>
-	<key>com.apple.security.cs.allow-jit</key>
-	<true/>
-	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-	<true/>
+
+	<!-- Reserved for a future "FaceTime mute / system input level" feature
+	     that we want the iPad to drive. Not exercised today; leaving on so
+	     adding the feature doesn't require re-signing. -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
-	<key>com.apple.security.device.camera</key>
-	<true/>
+
+	<!-- Loom transport: Bonjour discovery + Network.framework sessions. -->
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.network.server</key>
 	<true/>
-	<key>com.apple.security.personal-information.addressbook</key>
-	<true/>
-	<key>com.apple.security.personal-information.calendars</key>
-	<true/>
-	<key>com.apple.security.personal-information.location</key>
-	<true/>
-	<key>com.apple.security.personal-information.photos-library</key>
-	<true/>
+
+	<!-- CGEvent injection (input synthesis) needs Accessibility access.
+	     The user grants the actual TCC permission in System Settings; this
+	     entitlement just allows the request flow. -->
 	<key>com.apple.security.temporary-exception.accessibility</key>
 	<true/>
+
+	<!-- Loom identity (P-256 signing key) is stored in the Keychain. -->
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.miragecontrol.mac</string>

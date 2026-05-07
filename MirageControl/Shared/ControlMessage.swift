@@ -9,7 +9,10 @@ import Foundation
 
 public enum ControlMessage: Codable, Sendable {
     case mouseDelta(dx: Float, dy: Float)
-    case mouseScroll(dx: Float, dy: Float)
+    /// Continuous scroll delta tagged with a `ScrollPhase` so the host can
+    /// emit native trackpad-style scroll events (with rubber-banding +
+    /// momentum) instead of unphased mouse-wheel ticks.
+    case mouseScroll(dx: Float, dy: Float, phase: ScrollPhase)
     case mouseClick(button: MouseButton)
     case mouseDoubleClick(button: MouseButton)
     case keyboardShortcut(keys: [String])
@@ -18,11 +21,21 @@ public enum ControlMessage: Codable, Sendable {
     case authorizationStatus(status: String)
     
     // Bidirectional/New Features
-    case requestScreenshot
+    /// iPad → Mac: request a fresh screen capture. `requestID` is echoed back
+    /// in the response so a slow, late-arriving capture from a previous tap
+    /// can't hijack the UI of the next request. `mode` lets the iPad pick
+    /// between full-screen, a normalized region, or a single window.
+    case requestScreenshot(requestID: String, mode: CaptureMode)
     case mediaCommand(action: String)
-    case screenshotData(data: Data)
-    case screenshotError(message: String)
+    case screenshotData(requestID: String, data: Data)
+    case screenshotError(requestID: String, message: String)
     case activeAppUpdate(name: String, bundleID: String?)
+
+    /// iPad → Mac: enumerate currently visible user-facing windows so the
+    /// iPad can populate its window picker. Reply: `windowListResponse`.
+    case requestWindowList(requestID: String)
+    /// Mac → iPad: snapshot of visible windows at request time.
+    case windowListResponse(requestID: String, windows: [WindowInfo])
 
     // App Launcher
     case requestAppList
@@ -63,13 +76,14 @@ public enum ControlMessage: Codable, Sendable {
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot
+        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot, requestID, mode, windows, phase
     }
 
     private enum MessageType: String, Codable {
         case mouseDelta, mouseScroll, mouseClick, mouseDoubleClick
         case keyboardShortcut, launchApp, macroButton, authorizationStatus
         case requestScreenshot, mediaCommand, screenshotData, screenshotError, activeAppUpdate
+        case requestWindowList, windowListResponse
         case requestAppList, appListResponse
         case appShortcut
         case requestAppMenuShortcuts, appMenuShortcutsResponse
@@ -85,8 +99,14 @@ public enum ControlMessage: Codable, Sendable {
             self = .mouseDelta(dx: try c.decode(Float.self, forKey: .dx),
                                dy: try c.decode(Float.self, forKey: .dy))
         case .mouseScroll:
-            self = .mouseScroll(dx: try c.decode(Float.self, forKey: .dx),
-                                dy: try c.decode(Float.self, forKey: .dy))
+            // `phase` defaults to `.changed` for back-compat with builds
+            // that haven't been bumped to send phased scroll yet.
+            let phase = try c.decodeIfPresent(ScrollPhase.self, forKey: .phase) ?? .changed
+            self = .mouseScroll(
+                dx: try c.decode(Float.self, forKey: .dx),
+                dy: try c.decode(Float.self, forKey: .dy),
+                phase: phase
+            )
         case .mouseClick:
             self = .mouseClick(button: try c.decode(MouseButton.self, forKey: .button))
         case .mouseDoubleClick:
@@ -100,13 +120,33 @@ public enum ControlMessage: Codable, Sendable {
         case .authorizationStatus:
             self = .authorizationStatus(status: try c.decode(String.self, forKey: .status))
         case .requestScreenshot:
-            self = .requestScreenshot
+            // `mode` is optional for back-compat; missing implies full-screen.
+            let mode = try c.decodeIfPresent(CaptureMode.self, forKey: .mode) ?? .fullScreen
+            self = .requestScreenshot(
+                requestID: try c.decode(String.self, forKey: .requestID),
+                mode: mode
+            )
+        case .requestWindowList:
+            self = .requestWindowList(
+                requestID: try c.decode(String.self, forKey: .requestID)
+            )
+        case .windowListResponse:
+            self = .windowListResponse(
+                requestID: try c.decode(String.self, forKey: .requestID),
+                windows: try c.decode([WindowInfo].self, forKey: .windows)
+            )
         case .mediaCommand:
             self = .mediaCommand(action: try c.decode(String.self, forKey: .action))
         case .screenshotData:
-            self = .screenshotData(data: try c.decode(Data.self, forKey: .data))
+            self = .screenshotData(
+                requestID: try c.decode(String.self, forKey: .requestID),
+                data: try c.decode(Data.self, forKey: .data)
+            )
         case .screenshotError:
-            self = .screenshotError(message: try c.decode(String.self, forKey: .message))
+            self = .screenshotError(
+                requestID: try c.decode(String.self, forKey: .requestID),
+                message: try c.decode(String.self, forKey: .message)
+            )
         case .activeAppUpdate:
             self = .activeAppUpdate(name: try c.decode(String.self, forKey: .name),
                                     bundleID: try c.decodeIfPresent(String.self, forKey: .bundleID))
@@ -147,9 +187,11 @@ public enum ControlMessage: Codable, Sendable {
         case let .mouseDelta(dx, dy):
             try c.encode(MessageType.mouseDelta, forKey: .type)
             try c.encode(dx, forKey: .dx); try c.encode(dy, forKey: .dy)
-        case let .mouseScroll(dx, dy):
+        case let .mouseScroll(dx, dy, phase):
             try c.encode(MessageType.mouseScroll, forKey: .type)
-            try c.encode(dx, forKey: .dx); try c.encode(dy, forKey: .dy)
+            try c.encode(dx, forKey: .dx)
+            try c.encode(dy, forKey: .dy)
+            try c.encode(phase, forKey: .phase)
         case let .mouseClick(button):
             try c.encode(MessageType.mouseClick, forKey: .type)
             try c.encode(button, forKey: .button)
@@ -168,16 +210,27 @@ public enum ControlMessage: Codable, Sendable {
         case let .authorizationStatus(status):
             try c.encode(MessageType.authorizationStatus, forKey: .type)
             try c.encode(status, forKey: .status)
-        case .requestScreenshot:
+        case let .requestScreenshot(requestID, mode):
             try c.encode(MessageType.requestScreenshot, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
+            try c.encode(mode, forKey: .mode)
+        case let .requestWindowList(requestID):
+            try c.encode(MessageType.requestWindowList, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
+        case let .windowListResponse(requestID, windows):
+            try c.encode(MessageType.windowListResponse, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
+            try c.encode(windows, forKey: .windows)
         case let .mediaCommand(action):
             try c.encode(MessageType.mediaCommand, forKey: .type)
             try c.encode(action, forKey: .action)
-        case let .screenshotData(data):
+        case let .screenshotData(requestID, data):
             try c.encode(MessageType.screenshotData, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
             try c.encode(data, forKey: .data)
-        case let .screenshotError(message):
+        case let .screenshotError(requestID, message):
             try c.encode(MessageType.screenshotError, forKey: .type)
+            try c.encode(requestID, forKey: .requestID)
             try c.encode(message, forKey: .message)
         case let .activeAppUpdate(name, bundleID):
             try c.encode(MessageType.activeAppUpdate, forKey: .type)
