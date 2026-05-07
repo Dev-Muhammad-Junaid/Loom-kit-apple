@@ -113,20 +113,33 @@ final class ScreenCaptureService {
         return try Self.encodeJPEG(cgImage, quality: quality)
     }
 
-    /// Captures the main display, then crops it to `region` (normalized 0…1
-    /// coordinates relative to the captured frame, origin top-left) and
-    /// returns the cropped JPEG. Region capture is intentionally driven from
-    /// the Mac so the user gets a *fresh* pixel grid — the iPad only needs
-    /// to ship the rect.
-    func captureRegionJPEG(
+    /// Captures the main display at full native resolution, then crops it
+    /// to `normalizedRect` (0…1, origin top-left) and returns lossless PNG
+    /// data. Region capture is intentionally driven from the Mac so the
+    /// user gets a *fresh* pixel grid — the iPad only needs to ship the
+    /// rect.
+    ///
+    /// The previous implementation downscaled the entire display to ~2880
+    /// pixels wide *before* cropping. On a 5K display that meant the user's
+    /// region had already been resampled by ~1.8× before they ever saw it,
+    /// which is why region grabs looked soft and washed-out compared to
+    /// macOS's built-in `Cmd+Shift+4`. We now grab the display at full
+    /// native pixels and only downscale at the very end if the crop itself
+    /// exceeds `maxWidth` — most user-selected regions are well under
+    /// that, so they ship through pixel-for-pixel. PNG instead of JPEG
+    /// keeps text and UI edges crisp (and matches the windowed-capture
+    /// path so the on-device OCR handler sees the same encoding).
+    func captureRegion(
         normalizedRect: CGRect,
-        maxWidth: CGFloat = 1920,
-        quality: CGFloat = 0.75
+        maxWidth: CGFloat = 2400
     ) async throws -> Data {
         let display = try await primaryDisplay()
-        // Use a higher capture max for region grabs so the crop has real
-        // detail. We still bound it by the source size.
-        let fullImage = try await captureDisplay(display, maxWidth: max(maxWidth, 2880))
+        // Capture at full native pixels — no maxWidth cap. We'll downscale
+        // *after* cropping if the crop is still too big to ship.
+        let fullImage = try await captureDisplay(
+            display,
+            maxWidth: .greatestFiniteMagnitude
+        )
 
         let imgWidth = CGFloat(fullImage.width)
         let imgHeight = CGFloat(fullImage.height)
@@ -143,7 +156,9 @@ final class ScreenCaptureService {
               let cropped = fullImage.cropping(to: cropRect) else {
             throw CaptureError.captureFailed("Crop rect was empty")
         }
-        return try Self.encodeJPEG(cropped, quality: quality)
+
+        let finalImage = Self.downscale(cropped, maxWidth: maxWidth) ?? cropped
+        return try Self.encodePNG(finalImage)
     }
 
     /// Captures a single window by its `CGWindowID`. The output mirrors
@@ -368,6 +383,38 @@ final class ScreenCaptureService {
             throw CaptureError.encodeFailed
         }
         return data as Data
+    }
+
+    /// High-quality CGImage downscaler. Returns `nil` when the source is
+    /// already at or below `maxWidth` so callers can skip the work.
+    /// Used by `captureRegion` to bound a native-res crop before shipping.
+    private static func downscale(_ cgImage: CGImage, maxWidth: CGFloat) -> CGImage? {
+        let sourceWidth = CGFloat(cgImage.width)
+        guard sourceWidth > maxWidth else { return nil }
+
+        let ratio = maxWidth / sourceWidth
+        let newWidth  = Int((sourceWidth * ratio).rounded())
+        let newHeight = Int((CGFloat(cgImage.height) * ratio).rounded())
+        guard newWidth > 0, newHeight > 0 else { return nil }
+
+        // Use ImageIO's thumbnail path so we get Lanczos-style filtering
+        // for free — sharper than a straight CGContext draw at fractional
+        // scales, and there's no need for us to manage a bitmap buffer.
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            data, UTType.png.identifier as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+
+        guard let source = CGImageSourceCreateWithData(data, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceThumbnailMaxPixelSize: max(newWidth, newHeight),
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     /// Lossless PNG encoder, used for window captures so the shadow's

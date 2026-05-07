@@ -131,10 +131,14 @@ final class ControlReceiver {
         handle: LoomConnectionHandle
     ) async {
         do {
-            let jpeg: Data
+            // Format is per-mode now: full-screen is JPEG (small payloads
+            // for the common case), region and window are PNG (lossless,
+            // alpha-preserving). Callers on the iPad just decode via
+            // UIImage(data:) so they don't care which.
+            let payload: Data
             switch mode {
             case .fullScreen:
-                jpeg = try await ScreenCaptureService.shared.captureMainDisplayJPEG()
+                payload = try await ScreenCaptureService.shared.captureMainDisplayJPEG()
             case let .region(x, y, width, height):
                 let rect = CGRect(
                     x: CGFloat(x),
@@ -142,11 +146,11 @@ final class ControlReceiver {
                     width: CGFloat(width),
                     height: CGFloat(height)
                 )
-                jpeg = try await ScreenCaptureService.shared.captureRegionJPEG(normalizedRect: rect)
+                payload = try await ScreenCaptureService.shared.captureRegion(normalizedRect: rect)
             case let .window(windowID):
-                jpeg = try await ScreenCaptureService.shared.captureWindowJPEG(windowID: windowID)
+                payload = try await ScreenCaptureService.shared.captureWindowJPEG(windowID: windowID)
             }
-            try await handle.send(.screenshotData(requestID: requestID, data: jpeg))
+            try await handle.send(.screenshotData(requestID: requestID, data: payload))
         } catch ScreenCaptureService.CaptureError.permissionDenied {
             await sendError(requestID: requestID, to: handle,
                             message: "Screen Recording permission required. Please allow MirageControl in System Settings > Privacy & Security > Screen Recording, then try again.")

@@ -42,17 +42,11 @@ final class InputInjector {
     /// adds a subtle acceleration curve so small movements stay precise
     /// while large swipes cover more distance — matching macOS trackpad feel.
     ///
-    /// We deliberately do *not* clamp the synthesized position to a
-    /// MirageControl-side rectangle. macOS already clips out-of-bounds
-    /// CGEvent coordinates at the HID layer, and the very behavior we'd
-    /// be overriding — the cursor "pressing against" an edge — is what
-    /// drives multi-display routing AND Universal Control hand-off to a
-    /// neighboring Mac/iPad. Clamping ourselves blocks both. Instead, we
-    /// emit events that look like a real trackpad's HID stream:
-    ///   • absolute position (scaled by acceleration), and
-    ///   • the integer delta fields (`kCGMouseEventDeltaX/Y`) that UC's
-    ///     edge-pressure detector reads to recognize "user is continuing
-    ///     to push past the edge".
+    /// We let macOS handle every aspect of multi-display routing. No local
+    /// clamping, no synthetic delta fields — just a clean absolute-position
+    /// `mouseMoved` event. macOS clips out-of-bounds coordinates at the HID
+    /// layer on its own, so the cursor moves freely across every connected
+    /// display without us doing anything extra.
     func moveCursor(dx: Float, dy: Float) {
         guard isAccessibilityGranted else { return }
         let currentPos = NSEvent.mouseLocation
@@ -66,20 +60,11 @@ final class InputInjector {
 
         let next = CGPoint(x: cgCurrent.x + Double(accelDx),
                            y: cgCurrent.y + Double(accelDy))
-        guard let event = CGEvent(mouseEventSource: nil,
-                                  mouseType: .mouseMoved,
-                                  mouseCursorPosition: next,
-                                  mouseButton: .left) else { return }
-
-        // Real trackpads carry per-event quantized deltas in these fields.
-        // Without them macOS treats every event as a discrete cursor warp
-        // and Universal Control's hand-off detector never fires. With them,
-        // pushing past the edge feels exactly like a physical trackpad.
-        event.setIntegerValueField(.mouseEventDeltaX,
-                                   value: Int64(accelDx.rounded()))
-        event.setIntegerValueField(.mouseEventDeltaY,
-                                   value: Int64(accelDy.rounded()))
-        event.post(tap: .cghidEventTap)
+        let event = CGEvent(mouseEventSource: nil,
+                            mouseType: .mouseMoved,
+                            mouseCursorPosition: next,
+                            mouseButton: .left)
+        event?.post(tap: .cghidEventTap)
     }
 
     /// macOS-style pointer acceleration: small deltas stay 1:1,
@@ -287,67 +272,6 @@ final class InputInjector {
             .map(\.frame.maxY)
             .max() ?? (NSScreen.main?.frame.maxY ?? 900)
         return CGPoint(x: point.x, y: unionMaxY - point.y)
-    }
-
-    /// Clamps `point` to the *combined* screen real estate. We don't pin
-    /// the cursor to whichever display happens to contain it because then
-    /// the user could never cross from one screen to another. Instead we
-    /// snap to the closest valid pixel inside the union of screen frames.
-    private func clampToScreens(_ point: CGPoint, current: CGPoint) -> CGPoint {
-        let screens = Self.cgDisplayFrames()
-        guard !screens.isEmpty else {
-            // No screens? Just return the point verbatim — CGEvent will
-            // clamp it itself.
-            return point
-        }
-
-        // Fast path: still inside a screen → no clamping required.
-        if screens.contains(where: { $0.contains(point) }) {
-            return point
-        }
-
-        // Otherwise find the nearest point on any screen. This keeps the
-        // cursor crawling along the union edge instead of teleporting.
-        var bestPoint = point
-        var bestDistance = CGFloat.greatestFiniteMagnitude
-        for frame in screens {
-            let candidate = Self.clampPoint(point, to: frame)
-            let dx = candidate.x - point.x
-            let dy = candidate.y - point.y
-            let distance = dx * dx + dy * dy
-            if distance < bestDistance {
-                bestDistance = distance
-                bestPoint = candidate
-            }
-        }
-        // Subtract 1 from max edges so the cursor isn't pushed off-screen
-        // by floating-point rounding when the user pegs against a corner.
-        return bestPoint
-    }
-
-    private static func clampPoint(_ point: CGPoint, to frame: CGRect) -> CGPoint {
-        CGPoint(
-            x: max(frame.minX, min(frame.maxX - 1, point.x)),
-            y: max(frame.minY, min(frame.maxY - 1, point.y))
-        )
-    }
-
-    /// Returns each connected display's bounds in CGEvent coordinates
-    /// (origin top-left). Falls back to `CGMainDisplayID()` if Quartz
-    /// returns no displays — should never happen on a Mac with a screen,
-    /// but defensive coding doesn't hurt the hot path.
-    private static func cgDisplayFrames() -> [CGRect] {
-        var displayCount: UInt32 = 0
-        var result = CGGetActiveDisplayList(0, nil, &displayCount)
-        guard result == .success, displayCount > 0 else {
-            return [CGDisplayBounds(CGMainDisplayID())]
-        }
-        var ids = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
-        result = CGGetActiveDisplayList(displayCount, &ids, &displayCount)
-        guard result == .success else {
-            return [CGDisplayBounds(CGMainDisplayID())]
-        }
-        return ids.prefix(Int(displayCount)).map(CGDisplayBounds)
     }
 
     private func cgMouseTypes(for button: MouseButton) -> (CGEventType, CGEventType, CGMouseButton) {

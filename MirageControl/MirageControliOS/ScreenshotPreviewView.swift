@@ -21,6 +21,7 @@ struct ScreenshotPreviewView: View {
     @State private var isSaving = false
     @State private var toastTask: Task<Void, Never>?
     @State private var showAnnotationView = false
+    @State private var showOCRView = false
     // Holds the annotated version once the user finishes annotating;
     // all Save/Copy/Share actions use this instead of the original.
     @State private var annotatedImage: UIImage?
@@ -158,6 +159,20 @@ struct ScreenshotPreviewView: View {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         showAnnotationView = true
                     }
+
+                    // Runs Vision OCR on whatever image is currently showing
+                    // — the cropped region, the full screen, or the window.
+                    // The user asked for this specifically on region grabs;
+                    // exposing it on every preview costs nothing extra and
+                    // keeps the action row uniform.
+                    ActionButton(
+                        icon: "text.viewfinder",
+                        label: "Text",
+                        color: .white
+                    ) {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        showOCRView = true
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -170,6 +185,14 @@ struct ScreenshotPreviewView: View {
         }
         .sheet(isPresented: $showShareSheet) {
             ShareSheet(items: [annotatedImage ?? image])
+        }
+        .sheet(isPresented: $showOCRView) {
+            // Run OCR against the annotated image when present — text drawn
+            // on top is text the user might want to capture too — falling
+            // back to the original capture otherwise.
+            OCRResultView(image: annotatedImage ?? image) {
+                showOCRView = false
+            }
         }
         .fullScreenCover(isPresented: $showAnnotationView) {
             AnnotationView(image: annotatedImage ?? image) { result in
