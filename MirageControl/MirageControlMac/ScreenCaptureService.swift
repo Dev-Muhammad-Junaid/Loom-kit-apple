@@ -146,12 +146,17 @@ final class ScreenCaptureService {
         return try Self.encodeJPEG(cropped, quality: quality)
     }
 
-    /// Captures a single window by its `CGWindowID`. Falls back to a display
-    /// capture filtered to that window if the OS doesn't expose the window
-    /// through `SCShareableContent`.
+    /// Captures a single window by its `CGWindowID`. The output mirrors
+    /// macOS's native `Cmd+Shift+4 → Space → click` capture: WindowServer
+    /// renders the window's drop shadow as part of the composite, and the
+    /// surrounding shadow halo is encoded as transparent pixels in a PNG —
+    /// no manual padding, no opaque background. That's why this path
+    /// returns a PNG blob instead of a JPEG: JPEG can't carry alpha, and
+    /// the shadow's transparent edges are exactly what makes the result
+    /// look "premium".
     func captureWindowJPEG(
         windowID: UInt32,
-        maxWidth: CGFloat = 1920,
+        maxWidth: CGFloat = 2400,
         quality: CGFloat = 0.75
     ) async throws -> Data {
         let content = try await loadContent()
@@ -162,32 +167,58 @@ final class ScreenCaptureService {
             guard let window = refreshed.windows.first(where: { $0.windowID == windowID }) else {
                 throw CaptureError.windowNotFound
             }
-            return try await captureWindow(window, maxWidth: maxWidth, quality: quality)
+            return try await captureWindow(window, maxWidth: maxWidth)
         }
-        return try await captureWindow(window, maxWidth: maxWidth, quality: quality)
+        return try await captureWindow(window, maxWidth: maxWidth)
     }
 
     private func captureWindow(
         _ window: SCWindow,
-        maxWidth: CGFloat,
-        quality: CGFloat
+        maxWidth: CGFloat
     ) async throws -> Data {
         let filter = SCContentFilter(desktopIndependentWindow: window)
-        let frame = window.frame
-        let target = Self.targetSize(
-            sourceWidth: CGFloat(max(1, Int(frame.width))),
-            sourceHeight: CGFloat(max(1, Int(frame.height))),
-            maxWidth: maxWidth
-        )
+
+        // SCContentFilter exposes `contentRect` and `pointPixelScale` on
+        // macOS 14+, and they bake in the shadow margin once we've turned
+        // shadows back on (see `ignoreShadowsSingleWindow` below). That
+        // means we don't have to inflate the rect by hand or guess the
+        // shadow size — WindowServer tells us the natural bounding box.
+        let pixelScale: CGFloat
+        let contentRect: CGRect
+        if #available(macOS 14.0, *) {
+            pixelScale = CGFloat(filter.pointPixelScale)
+            contentRect = filter.contentRect
+        } else {
+            // Fallback that should never trigger given the 14.0 deployment
+            // target; included so the call site stays branch-clean.
+            pixelScale = NSScreen.main?.backingScaleFactor ?? 2.0
+            contentRect = window.frame
+        }
+
+        let nativePixelWidth  = max(1, contentRect.width  * pixelScale)
+        let nativePixelHeight = max(1, contentRect.height * pixelScale)
+
+        // Down-scale only when the native pixel grid exceeds `maxWidth`.
+        // PNG of a non-downscaled retina window is ~2-4 MB; that's fine
+        // for the iPad over local Wi-Fi but oversized for OCR / preview,
+        // so the cap stays useful.
+        let downscale = min(1.0, maxWidth / nativePixelWidth)
 
         let config = SCStreamConfiguration()
-        config.width  = Int(target.width)
-        config.height = Int(target.height)
+        config.width  = Int((nativePixelWidth  * downscale).rounded())
+        config.height = Int((nativePixelHeight * downscale).rounded())
         config.showsCursor = false
         config.capturesAudio = false
         config.pixelFormat = kCVPixelFormatType_32BGRA
+        // Transparent fill so empty halo around the shadow stays empty
+        // instead of being painted with the system default (white).
+        config.backgroundColor = .clear
         if #available(macOS 14.0, *) {
             config.captureResolution = .best
+            // Default for single-window captures is "ignore the shadow";
+            // we want the opposite. Together with `backgroundColor = .clear`,
+            // this is what gives us the macOS screenshot.app look.
+            config.ignoreShadowsSingleWindow = false
         }
 
         let cgImage: CGImage
@@ -199,7 +230,9 @@ final class ScreenCaptureService {
         } catch {
             throw CaptureError.captureFailed(error.localizedDescription)
         }
-        return try Self.encodeJPEG(cgImage, quality: quality)
+        // PNG, not JPEG: the shadow halo is transparent and JPEG would
+        // collapse it to an opaque rectangle.
+        return try Self.encodePNG(cgImage)
     }
 
     /// Returns a snapshot of every visible user-facing window suitable for
@@ -331,6 +364,23 @@ final class ScreenCaptureService {
             kCGImageDestinationLossyCompressionQuality: quality
         ]
         CGImageDestinationAddImage(dest, cgImage, options as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else {
+            throw CaptureError.encodeFailed
+        }
+        return data as Data
+    }
+
+    /// Lossless PNG encoder, used for window captures so the shadow's
+    /// transparent halo survives the round-trip. JPEG would flatten alpha
+    /// to an opaque rectangle and we'd lose the macOS-screenshot look.
+    private static func encodePNG(_ cgImage: CGImage) throws -> Data {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            data, UTType.png.identifier as CFString, 1, nil
+        ) else {
+            throw CaptureError.encodeFailed
+        }
+        CGImageDestinationAddImage(dest, cgImage, nil)
         guard CGImageDestinationFinalize(dest) else {
             throw CaptureError.encodeFailed
         }

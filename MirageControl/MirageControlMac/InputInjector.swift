@@ -37,20 +37,27 @@ final class InputInjector {
     // MARK: - Mouse movement
 
     /// Moves the cursor by a relative delta (in points).
+    ///
     /// The iPad applies user-chosen sensitivity before sending; the host
     /// adds a subtle acceleration curve so small movements stay precise
     /// while large swipes cover more distance — matching macOS trackpad feel.
     ///
-    /// The cursor moves freely across every connected display: instead of
-    /// clamping to `CGMainDisplayID()`'s bounds we clamp to the union of
-    /// `NSScreen.screens`. When the cursor is between two displays we keep
-    /// it inside whichever one currently contains it, which is what AppKit
-    /// itself does when you push a real mouse off one screen.
+    /// We deliberately do *not* clamp the synthesized position to a
+    /// MirageControl-side rectangle. macOS already clips out-of-bounds
+    /// CGEvent coordinates at the HID layer, and the very behavior we'd
+    /// be overriding — the cursor "pressing against" an edge — is what
+    /// drives multi-display routing AND Universal Control hand-off to a
+    /// neighboring Mac/iPad. Clamping ourselves blocks both. Instead, we
+    /// emit events that look like a real trackpad's HID stream:
+    ///   • absolute position (scaled by acceleration), and
+    ///   • the integer delta fields (`kCGMouseEventDeltaX/Y`) that UC's
+    ///     edge-pressure detector reads to recognize "user is continuing
+    ///     to push past the edge".
     func moveCursor(dx: Float, dy: Float) {
         guard isAccessibilityGranted else { return }
         let currentPos = NSEvent.mouseLocation
         // NSEvent y is flipped relative to CGDisplayBounds. We flip using
-        // the *global* frame's max-y so the conversion still works on
+        // the *global* frame's max-y so the conversion stays correct on
         // multi-display setups where the main display isn't at the top.
         let cgCurrent = Self.flipNSPointToCG(currentPos)
 
@@ -59,12 +66,20 @@ final class InputInjector {
 
         let next = CGPoint(x: cgCurrent.x + Double(accelDx),
                            y: cgCurrent.y + Double(accelDy))
-        let clamped = clampToScreens(next, current: cgCurrent)
-        let event = CGEvent(mouseEventSource: nil,
-                            mouseType: .mouseMoved,
-                            mouseCursorPosition: clamped,
-                            mouseButton: .left)
-        event?.post(tap: .cghidEventTap)
+        guard let event = CGEvent(mouseEventSource: nil,
+                                  mouseType: .mouseMoved,
+                                  mouseCursorPosition: next,
+                                  mouseButton: .left) else { return }
+
+        // Real trackpads carry per-event quantized deltas in these fields.
+        // Without them macOS treats every event as a discrete cursor warp
+        // and Universal Control's hand-off detector never fires. With them,
+        // pushing past the edge feels exactly like a physical trackpad.
+        event.setIntegerValueField(.mouseEventDeltaX,
+                                   value: Int64(accelDx.rounded()))
+        event.setIntegerValueField(.mouseEventDeltaY,
+                                   value: Int64(accelDy.rounded()))
+        event.post(tap: .cghidEventTap)
     }
 
     /// macOS-style pointer acceleration: small deltas stay 1:1,
