@@ -12,6 +12,13 @@ struct AuthorizationOverlay: View {
 
     @Environment(\.colorScheme) private var colorScheme
 
+    /// True when the only sensible action is to dismiss the overlay (the
+    /// connection is already gone). Drives both the button label and its
+    /// destructive role.
+    private var isTerminalState: Bool {
+        status == "denied" || status == "host_disconnected"
+    }
+
     var body: some View {
         ZStack {
             MirageTheme.authScrim(colorScheme)
@@ -19,37 +26,49 @@ struct AuthorizationOverlay: View {
 
             VStack(spacing: 22) {
                 statusContent
-
-                Button(action: onDisconnect) {
-                    Text((status == "denied" || status == "host_disconnected") ? "Dismiss" : "Disconnect")
-                        .font(MirageTheme.TypeStyle.buttonRounded)
-                        .foregroundStyle(Color.primary)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 12)
-                        .background(
-                            Capsule()
-                                .fill(MirageTheme.authSecondaryButtonFill(colorScheme))
-                                .overlay(
-                                    Capsule()
-                                        .strokeBorder(MirageTheme.authSecondaryButtonBorder(colorScheme), lineWidth: 1)
-                                )
-                        )
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 8)
+                disconnectButton.padding(.top, 8)
             }
             .padding(28)
             .frame(maxWidth: .infinity)
-            .background(
-                RoundedRectangle(cornerRadius: MirageTheme.Radius.xxl, style: .continuous)
-                    .fill(MirageTheme.authCardFill(colorScheme))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: MirageTheme.Radius.xxl, style: .continuous)
-                            .strokeBorder(MirageTheme.authCardBorder(colorScheme), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.12), radius: 24, y: 12)
-            )
+            .background(cardBackground)
             .padding(.horizontal, 28)
+        }
+    }
+
+    // MARK: - Native button (matches main-page toolbar styling)
+    //
+    // iOS 26 picks up Liquid Glass via `.glass`. The destructive role tints
+    // the label red (matching the main-page disconnect button). On iOS 17
+    // we fall back to `.bordered`, which gives the same shape language.
+
+    @ViewBuilder
+    private var disconnectButton: some View {
+        let label = isTerminalState ? "Dismiss" : "Disconnect"
+        let role: ButtonRole? = isTerminalState ? .cancel : .destructive
+        if #available(iOS 26.0, *) {
+            Button(label, role: role, action: onDisconnect)
+                .buttonStyle(.glass)
+                .controlSize(.large)
+        } else {
+            Button(label, role: role, action: onDisconnect)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+        }
+    }
+
+    // MARK: - Native dialog card (Liquid Glass on iOS 26, material on iOS 17)
+
+    @ViewBuilder
+    private var cardBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: MirageTheme.Radius.xxl, style: .continuous)
+        if #available(iOS 26.0, *) {
+            shape
+                .fill(.regularMaterial)
+                .glassEffect(in: shape)
+        } else {
+            shape
+                .fill(.regularMaterial)
+                .shadow(color: MirageTheme.dialogCardShadow(colorScheme), radius: 24, y: 12)
         }
     }
 
@@ -57,75 +76,75 @@ struct AuthorizationOverlay: View {
     private var statusContent: some View {
         switch status {
         case "pending":
-            VStack(spacing: 16) {
-                Image(systemName: "lock.display")
-                    .font(.system(size: 52))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(MirageTheme.violet, MirageTheme.violet.opacity(0.45))
-                    .symbolEffect(.pulse, options: .repeating)
-
-                VStack(spacing: 8) {
-                    Text("Waiting for Approval")
-                        .font(MirageTheme.TypeStyle.titleRounded)
-                        .foregroundStyle(Color.primary)
-                        .multilineTextAlignment(.center)
-
-                    Text("Please allow the connection request on \(peerName).")
-                        .font(MirageTheme.TypeStyle.bodyRounded)
-                        .foregroundStyle(Color.secondary)
-                        .multilineTextAlignment(.center)
-                }
-            }
+            statusBlock(
+                systemImage: "lock.display",
+                title: "Waiting for Approval",
+                message: "Please allow the connection request on \(peerName).",
+                pulse: true
+            )
 
         case "host_disconnected":
-            VStack(spacing: 16) {
-                Image(systemName: "wifi.slash")
-                    .font(.system(size: 52))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.orange, Color.orange.opacity(0.5))
-
-                VStack(spacing: 8) {
-                    Text("Disconnected")
-                        .font(MirageTheme.TypeStyle.titleRounded)
-                        .foregroundStyle(Color.primary)
-                        .multilineTextAlignment(.center)
-
-                    Text("The connection to \(peerName) was closed.")
-                        .font(MirageTheme.TypeStyle.bodyRounded)
-                        .foregroundStyle(Color.secondary)
-                        .multilineTextAlignment(.center)
-                }
-            }
+            statusBlock(
+                systemImage: "wifi.slash",
+                title: "Disconnected",
+                message: "The connection to \(peerName) was closed."
+            )
 
         case "denied":
-            VStack(spacing: 16) {
-                Image(systemName: "xmark.shield.fill")
-                    .font(.system(size: 52))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(Color.red, Color.red.opacity(0.45))
-
-                VStack(spacing: 8) {
-                    Text("Access Denied")
-                        .font(MirageTheme.TypeStyle.titleRounded)
-                        .foregroundStyle(Color.primary)
-                        .multilineTextAlignment(.center)
-
-                    Text("Your request to control \(peerName) was declined.")
-                        .font(MirageTheme.TypeStyle.bodyRounded)
-                        .foregroundStyle(Color.secondary)
-                        .multilineTextAlignment(.center)
-                }
-            }
+            statusBlock(
+                systemImage: "xmark.shield.fill",
+                title: "Access Denied",
+                message: "Your request to control \(peerName) was declined."
+            )
 
         default:
             VStack(spacing: 16) {
                 Image(systemName: "questionmark.circle")
-                    .font(.system(size: 52))
+                    .font(.system(size: MirageTheme.StatusIcon.size))
                     .foregroundStyle(Color.secondary)
 
                 Text("Unknown state")
                     .font(MirageTheme.TypeStyle.titleRounded)
                     .foregroundStyle(Color.primary)
+            }
+        }
+    }
+
+    /// Shared layout for the three concrete status states (pending /
+    /// disconnected / denied). Pulls icon colors from
+    /// `MirageTheme.StatusIcon.colors(for:)` so the palette stays
+    /// consistent with any other dialog using the same status strings.
+    @ViewBuilder
+    private func statusBlock(
+        systemImage: String,
+        title: String,
+        message: String,
+        pulse: Bool = false
+    ) -> some View {
+        let palette = MirageTheme.StatusIcon.colors(for: status)
+        VStack(spacing: 16) {
+            Group {
+                if pulse {
+                    Image(systemName: systemImage)
+                        .symbolEffect(.pulse, options: .repeating)
+                } else {
+                    Image(systemName: systemImage)
+                }
+            }
+            .font(.system(size: MirageTheme.StatusIcon.size))
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(palette.primary, palette.secondary)
+
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(MirageTheme.TypeStyle.titleRounded)
+                    .foregroundStyle(Color.primary)
+                    .multilineTextAlignment(.center)
+
+                Text(message)
+                    .font(MirageTheme.TypeStyle.bodyRounded)
+                    .foregroundStyle(Color.secondary)
+                    .multilineTextAlignment(.center)
             }
         }
     }

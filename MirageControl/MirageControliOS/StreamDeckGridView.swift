@@ -60,23 +60,10 @@ struct StreamDeckGridView: View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
                 // ── Search bar ──────────────────────────────────
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(Color.secondary.opacity(0.6))
-                        .font(.system(size: 14))
-                    TextField("Search apps…", text: $searchText)
-                        .font(.system(size: 14, design: .rounded))
-                        .foregroundStyle(Color.primary)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: MirageTheme.Radius.sm, style: .continuous)
-                        .fill(MirageTheme.searchFieldFill(colorScheme))
-                )
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
+                SearchField(text: $searchText, prompt: "Search apps")
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 8)
 
                 // ── Contextual Quick Actions bar ────────────────
                 // Replaces the old static 4-column grid. Morphs as the Mac's
@@ -363,6 +350,63 @@ private struct AppButton: View {
                         .font(.system(size: 24, weight: .thin))
                         .foregroundStyle(Color.primary.opacity(0.4))
                 )
+        }
+    }
+}
+
+// MARK: - Search Field
+//
+// Native-feeling iOS search bar built inline. We don't use the
+// `.searchable()` modifier here because the parent `ControlView` already
+// owns the navigation toolbar (peer name + capture/disconnect buttons),
+// and `.searchable()` would hoist a second search affordance into that
+// toolbar that only makes sense on the Apps tab. An inline composition
+// gives us the same look (magnifying glass + plain `TextField` + clear
+// button on a soft fill) without fighting for nav-bar space.
+
+private struct SearchField: View {
+    @Binding var text: String
+    let prompt: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+
+            TextField(prompt, text: $text)
+                .textFieldStyle(.plain)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+                .transition(.opacity.combined(with: .scale))
+            }
+        }
+        .font(.body)
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(background)
+        .animation(.easeInOut(duration: 0.15), value: text.isEmpty)
+    }
+
+    @ViewBuilder
+    private var background: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        if #available(iOS 26.0, *) {
+            shape.fill(.regularMaterial)
+                .glassEffect(in: shape)
+        } else {
+            shape.fill(.regularMaterial)
         }
     }
 }

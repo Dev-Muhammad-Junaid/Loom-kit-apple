@@ -525,42 +525,15 @@ struct KeyboardFAB: View {
     let isActive: Bool
     let onTap: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var isPressed = false
-
     var body: some View {
-        Button(action: onTap) {
-            ZStack {
-                Circle()
-                    .fill(backgroundColor)
-                    .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
-                Circle()
-                    .strokeBorder(strokeColor, lineWidth: 1)
-                Image(systemName: "keyboard")
-                    .font(.system(size: 22, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isActive ? Color.white : Color.primary.opacity(0.85))
-            }
-            .frame(width: 54, height: 54)
-            .scaleEffect(isPressed ? 0.9 : 1.0)
-            .animation(.spring(response: 0.22, dampingFraction: 0.65), value: isPressed)
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isActive)
-        }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded   { _ in isPressed = false }
+        FABButton(
+            systemImage: "keyboard",
+            isActive: isActive,
+            tint: MirageTheme.FAB.keyboardTint,
+            accessibilityLabel: isActive ? "Hide text edit actions"
+                                         : "Show text edit actions",
+            onTap: onTap
         )
-        .accessibilityLabel(isActive ? "Hide text edit actions" : "Show text edit actions")
-    }
-
-    private var backgroundColor: Color {
-        isActive ? MirageTheme.violet : MirageTheme.subtleWellFill(colorScheme)
-    }
-
-    private var strokeColor: Color {
-        isActive ? MirageTheme.violet.opacity(0.5) : Color.primary.opacity(0.12)
     }
 }
 
@@ -573,44 +546,68 @@ struct NumericFAB: View {
     let isActive: Bool
     let onTap: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var isPressed = false
+    var body: some View {
+        FABButton(
+            systemImage: "textformat.123",
+            isActive: isActive,
+            tint: MirageTheme.FAB.numericTint,
+            accessibilityLabel: isActive ? "Hide number keys"
+                                         : "Show number keys",
+            onTap: onTap
+        )
+    }
+}
 
-    private let activeTint = Color(red: 0.15, green: 0.62, blue: 0.58)
+// MARK: - Shared FAB renderer
+//
+// `KeyboardFAB` and `NumericFAB` are thin shells around a native `Button`
+// circular toggle. The actual visual treatment comes from the system:
+// iOS 26+ uses Liquid Glass via `.glass` / `.glassProminent`; iOS 17
+// falls back to `.bordered` / `.borderedProminent`. Either way, geometry,
+// shadow, and press animations are handled by the platform — we only
+// pick the icon and the active tint.
+
+private struct FABButton: View {
+    let systemImage: String
+    let isActive: Bool
+    let tint: Color
+    let accessibilityLabel: String
+    let onTap: () -> Void
 
     var body: some View {
-        Button(action: onTap) {
-            ZStack {
-                Circle()
-                    .fill(backgroundColor)
-                    .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
-                Circle()
-                    .strokeBorder(strokeColor, lineWidth: 1)
-                Image(systemName: "textformat.123")
-                    .font(.system(size: 20, weight: .medium))
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(isActive ? Color.white : Color.primary.opacity(0.85))
+        nativeButton
+            .buttonBorderShape(.circle)
+            .controlSize(.extraLarge)
+            .accessibilityLabel(accessibilityLabel)
+    }
+
+    @ViewBuilder
+    private var nativeButton: some View {
+        if #available(iOS 26.0, *) {
+            if isActive {
+                Button(action: onTap) { icon }
+                    .buttonStyle(.glassProminent)
+                    .tint(tint)
+            } else {
+                Button(action: onTap) { icon }
+                    .buttonStyle(.glass)
             }
-            .frame(width: 54, height: 54)
-            .scaleEffect(isPressed ? 0.9 : 1.0)
-            .animation(.spring(response: 0.22, dampingFraction: 0.65), value: isPressed)
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isActive)
+        } else {
+            if isActive {
+                Button(action: onTap) { icon }
+                    .buttonStyle(.borderedProminent)
+                    .tint(tint)
+            } else {
+                Button(action: onTap) { icon }
+                    .buttonStyle(.bordered)
+            }
         }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded   { _ in isPressed = false }
-        )
-        .accessibilityLabel(isActive ? "Hide number keys" : "Show number keys")
     }
 
-    private var backgroundColor: Color {
-        isActive ? activeTint : MirageTheme.subtleWellFill(colorScheme)
-    }
-
-    private var strokeColor: Color {
-        isActive ? activeTint.opacity(0.5) : Color.primary.opacity(0.12)
+    private var icon: some View {
+        Image(systemName: systemImage)
+            .font(.title2)
+            .symbolRenderingMode(.hierarchical)
     }
 }
 

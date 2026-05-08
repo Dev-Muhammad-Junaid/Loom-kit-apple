@@ -19,7 +19,9 @@ struct PeerPickerView: View {
 
     var body: some View {
         ZStack {
-            MirageTheme.canvasBackground(colorScheme).ignoresSafeArea()
+            // Hero sunset shader background — see `MirageTheme.heroSunsetBackground()`
+            MirageTheme.heroSunsetBackground()
+                .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 // ── Header ────────────────────────────────────────────
@@ -28,21 +30,26 @@ struct PeerPickerView: View {
                 // ── Peer list ─────────────────────────────────────────
                 if peers.isEmpty {
                     emptyState
+                    Spacer()
                 } else {
-                    ScrollView(showsIndicators: false) {
-                        LazyVStack(spacing: 10) {
+                    List {
+                        Section {
                             ForEach(peers) { peer in
                                 PeerRow(
                                     peer: peer,
-                                    isConnecting: connecting == peer.deviceID,
-                                    colorScheme: colorScheme
+                                    isConnecting: connecting == peer.deviceID
                                 ) {
                                     connectTo(peer)
                                 }
+                                .listRowBackground(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(.regularMaterial)
+                                )
                             }
                         }
-                        .padding(.horizontal, 20)
                     }
+                    .listStyle(.insetGrouped)
+                    .scrollContentBackground(.hidden)
                 }
 
                 // ── Error banner ──────────────────────────────────────
@@ -60,8 +67,6 @@ struct PeerPickerView: View {
                         .padding(.top, 8)
                         .transition(.opacity)
                 }
-
-                Spacer()
 
                 Text("Make sure your Mac is on the same Wi-Fi network")
                     .font(.system(size: 12))
@@ -90,7 +95,7 @@ struct PeerPickerView: View {
             }
         }
         .padding(.top, 72)
-        .padding(.bottom, 44)
+        .padding(.bottom, 24)
     }
 
     // MARK: - Empty state
@@ -134,36 +139,28 @@ struct PeerPickerView: View {
 private struct PeerRow: View {
     let peer: LoomPeerSnapshot
     let isConnecting: Bool
-    let colorScheme: ColorScheme
     let onTap: () -> Void
-
-    @State private var isPressed = false
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 16) {
-                // Mac icon
-                ZStack {
-                    RoundedRectangle(cornerRadius: MirageTheme.Radius.sm)
-                        .fill(MirageTheme.subtleWellFill(colorScheme))
-                        .frame(width: 46, height: 46)
-                    Image(systemName: "desktopcomputer")
-                        .font(.system(size: 20, weight: .thin))
-                        .symbolRenderingMode(.hierarchical)
-                        .foregroundStyle(Color.primary)
-                }
+            HStack(spacing: 14) {
+                Image(systemName: "desktopcomputer")
+                    .font(.title2)
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(MirageTheme.violet)
+                    .frame(width: 36, height: 36)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(peer.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                    HStack(spacing: 4) {
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    HStack(spacing: 5) {
                         Circle()
                             .fill(peer.isNearby ? MirageTheme.success : Color.orange)
                             .frame(width: 6, height: 6)
                         Text(peer.isNearby ? "Nearby" : "Remote")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.secondary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -171,35 +168,15 @@ private struct PeerRow: View {
 
                 if isConnecting {
                     ProgressView()
-                        .scaleEffect(0.9)
                 } else {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.secondary.opacity(0.6))
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 14)
-            .background(
-                RoundedRectangle(cornerRadius: MirageTheme.Radius.lg)
-                    .fill(MirageTheme.cardFill(colorScheme, pressed: isPressed))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: MirageTheme.Radius.lg)
-                            .strokeBorder(MirageTheme.cardBorder(colorScheme), lineWidth: 1)
-                    )
-                    .shadow(
-                        color: colorScheme == .dark ? .clear : .black.opacity(0.04),
-                        radius: 6, y: 2
-                    )
-            )
-            .scaleEffect(isPressed ? 0.97 : 1.0)
-            .animation(.spring(duration: 0.2), value: isPressed)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded   { _ in isPressed = false }
-        )
     }
 }

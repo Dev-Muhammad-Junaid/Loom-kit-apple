@@ -95,44 +95,80 @@ struct ControlView: View {
     }
 
     var body: some View {
-        ZStack {
-            MirageTheme.canvasBackground(colorScheme).ignoresSafeArea()
+        NavigationStack {
+            ZStack {
+                MirageTheme.canvasBackground(colorScheme).ignoresSafeArea()
 
-            if let sender {
-                VStack(spacing: 0) {
-                    navBar
-                    Divider().overlay(MirageTheme.navDivider(colorScheme))
-                    tabSwitcher
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                    Divider().overlay(MirageTheme.navDivider(colorScheme))
+                if let sender {
+                    VStack(spacing: 0) {
+                        tabSwitcher
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
+                        Divider().overlay(MirageTheme.navDivider(colorScheme))
 
-                    Group {
-                        switch selectedTab {
-                        case .trackpad:
-                            TrackpadView(sender: sender, colorScheme: colorScheme)
-                        case .streamdeck:
-                            StreamDeckGridView(
-                                sender: sender,
-                                colorScheme: colorScheme,
-                                installedApps: installedApps,
-                                activeBundleID: activeBundleID,
-                                runningBundleIDs: runningBundleIDs,
-                                uiContext: uiContext
-                            )
+                        Group {
+                            switch selectedTab {
+                            case .trackpad:
+                                TrackpadView(sender: sender, colorScheme: colorScheme)
+                            case .streamdeck:
+                                StreamDeckGridView(
+                                    sender: sender,
+                                    colorScheme: colorScheme,
+                                    installedApps: installedApps,
+                                    activeBundleID: activeBundleID,
+                                    runningBundleIDs: runningBundleIDs,
+                                    uiContext: uiContext
+                                )
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.18), value: selectedTab)
+                    }
+                } else {
+                    MirageLoadingStateView(
+                        title: "Initializing…",
+                        verticalPadding: 48,
+                        progressScale: 1.28
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 2) {
+                        Text(peerName)
+                            .font(.headline)
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(MirageTheme.success)
+                                .frame(width: 6, height: 6)
+                            Text(activeAppName ?? "Connected")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.18), value: selectedTab)
                 }
-            } else {
-                MirageLoadingStateView(
-                    title: "Initializing…",
-                    verticalPadding: 48,
-                    progressScale: 1.28
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ToolbarItem(placement: .topBarTrailing) {
+                    CaptureCapsule(
+                        isBusy: isRequestingScreenshot,
+                        onFullScreen: { beginCapture(intent: .fullScreen, mode: .fullScreen) },
+                        onRegion:     { beginCapture(intent: .regionPicking, mode: .fullScreen) },
+                        onWindow:     { openWindowPicker() },
+                        onOCR:        { beginCapture(intent: .ocr, mode: .fullScreen) }
+                    )
+                }
+                if #available(iOS 26.0, *) {
+                    ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: onDisconnect) {
+                        Image(systemName: "minus.circle")
+                    }
+                    .tint(.red)
+                    .accessibilityLabel("Disconnect")
+                }
             }
         }
         // Screenshot sheet
@@ -397,91 +433,18 @@ struct ControlView: View {
         }
     }
 
-    // MARK: - Nav Bar
-
-    private var navBar: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(peerName)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(MirageTheme.success)
-                        .frame(width: 6, height: 6)
-                        .shadow(color: MirageTheme.success.opacity(0.8), radius: 4)
-
-                    if let app = activeAppName {
-                        Text(app)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.secondary)
-                            .id(app)
-                    } else {
-                        Text("Connected")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.secondary)
-                    }
-                }
-            }
-
-            Spacer()
-
-            HStack(spacing: 12) {
-                // Capture capsule — primary tap = full-screen, long-press or
-                // caret tap = options menu (Region, Window, OCR Text).
-                CaptureCapsule(
-                    isBusy: isRequestingScreenshot,
-                    onFullScreen: { beginCapture(intent: .fullScreen, mode: .fullScreen) },
-                    onRegion:     { beginCapture(intent: .regionPicking, mode: .fullScreen) },
-                    onWindow:     { openWindowPicker() },
-                    onOCR:        { beginCapture(intent: .ocr, mode: .fullScreen) }
-                )
-
-                // Disconnect button
-                Button(action: onDisconnect) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "minus.circle")
-                            .font(.system(size: 12))
-                        Text("Disconnect")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 7)
-                    .background(
-                        Capsule()
-                            .fill(Color.primary.opacity(0.07))
-                            .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-    }
-
     // MARK: - Tab Switcher
 
     private var tabSwitcher: some View {
-        HStack(spacing: 6) {
+        Picker("View", selection: $selectedTab) {
             ForEach(Tab.allCases, id: \.self) { tab in
-                TabPill(tab: tab, isSelected: selectedTab == tab, colorScheme: colorScheme) {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.75)) {
-                        selectedTab = tab
-                    }
-                }
+                Label(tab.rawValue, systemImage: tab.icon)
+                    .labelStyle(.titleAndIcon)
+                    .tag(tab)
             }
         }
-        .padding(4)
-        .background(
-            RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
-                .fill(MirageTheme.tabContainerFill(colorScheme))
-                .overlay(
-                    RoundedRectangle(cornerRadius: MirageTheme.Radius.md, style: .continuous)
-                        .strokeBorder(MirageTheme.tabContainerBorder(colorScheme), lineWidth: 1)
-                )
-        )
+        .pickerStyle(.segmented)
+        .controlSize(.large)
     }
 
     // MARK: - Capture flow
@@ -581,50 +544,7 @@ struct ControlView: View {
     }
 }
 
-// MARK: - TabPill
-
-private struct TabPill: View {
-    let tab: ControlView.Tab
-    let isSelected: Bool
-    let colorScheme: ColorScheme
-    let action: () -> Void
-
-    private var activeShadow: Color {
-        colorScheme == .dark ? .clear : .black.opacity(0.06)
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: tab.icon)
-                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                Text(tab.rawValue)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular, design: .rounded))
-            }
-            .foregroundStyle(isSelected ? Color.primary : Color.secondary.opacity(0.7))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: MirageTheme.Radius.md - 3, style: .continuous)
-                    .fill(isSelected ? MirageTheme.tabPillSelectedFill(colorScheme) : Color.clear)
-                    .shadow(color: activeShadow, radius: 4, y: 1)
-                    .animation(.spring(response: 0.28, dampingFraction: 0.75), value: isSelected)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 // MARK: - Capture Capsule
-//
-// Capsule with two zones: a primary camera button on the left and a caret
-// menu on the right. Both expose the same options menu (Region, Window,
-// OCR Text), but the camera button additionally fires the default
-// full-screen capture on tap so the most common path stays a single tap.
-//
-// Long-pressing the camera *also* opens the menu — that's the SwiftUI
-// `Menu(primaryAction:)` contract — so power users have three identical
-// ways to reach the menu (long-press, tap caret, swipe down).
 
 private struct CaptureCapsule: View {
     let isBusy: Bool
@@ -633,43 +553,39 @@ private struct CaptureCapsule: View {
     let onWindow: () -> Void
     let onOCR: () -> Void
 
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        HStack(spacing: 0) {
-            primaryButton
-            divider
-            caretMenu
-        }
-        .background(
-            Capsule()
-                .fill(Color.primary.opacity(isBusy ? 0.04 : 0.07))
-                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1), lineWidth: 1))
-        )
-        .clipShape(Capsule())
-        .opacity(isBusy ? 0.85 : 1.0)
-        .animation(.easeOut(duration: 0.15), value: isBusy)
-    }
-
-    private var primaryButton: some View {
-        // SwiftUI Menu with `primaryAction:` — tap fires the action, long
-        // press opens the menu. Disabled-on-busy is enforced by the parent.
         Menu {
-            menuItems
+            Button {
+                onFullScreen()
+            } label: {
+                Label("Full Screen", systemImage: "rectangle.dashed")
+            }
+            Button {
+                onRegion()
+            } label: {
+                Label("Region…", systemImage: "rectangle.dashed.badge.record")
+            }
+            Button {
+                onWindow()
+            } label: {
+                Label("Window…", systemImage: "macwindow")
+            }
+            Divider()
+            Button {
+                onOCR()
+            } label: {
+                Label("Recognize Text", systemImage: "text.viewfinder")
+            }
         } label: {
-            ZStack {
-                Color.clear.frame(width: 44, height: 36)
-                if isBusy {
-                    ProgressView()
-                        .scaleEffect(0.65)
-                        .tint(Color.primary.opacity(0.5))
-                } else {
+            if isBusy {
+                ProgressView().controlSize(.small)
+            } else {
+                HStack(spacing: 3) {
                     Image(systemName: "camera.viewfinder")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Color.primary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
                 }
             }
-            .contentShape(Rectangle())
         } primaryAction: {
             guard !isBusy else { return }
             onFullScreen()
@@ -677,53 +593,6 @@ private struct CaptureCapsule: View {
         .disabled(isBusy)
         .accessibilityLabel("Capture")
         .accessibilityHint("Tap for a full-screen capture, long-press for region or window options.")
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(Color.primary.opacity(0.12))
-            .frame(width: 1, height: 22)
-    }
-
-    private var caretMenu: some View {
-        Menu {
-            menuItems
-        } label: {
-            ZStack {
-                Color.clear.frame(width: 28, height: 36)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.primary.opacity(isBusy ? 0.35 : 0.7))
-            }
-            .contentShape(Rectangle())
-        }
-        .disabled(isBusy)
-        .accessibilityLabel("Capture options")
-    }
-
-    @ViewBuilder
-    private var menuItems: some View {
-        Button {
-            onFullScreen()
-        } label: {
-            Label("Full Screen", systemImage: "rectangle.dashed")
-        }
-        Button {
-            onRegion()
-        } label: {
-            Label("Region…", systemImage: "rectangle.dashed.badge.record")
-        }
-        Button {
-            onWindow()
-        } label: {
-            Label("Window…", systemImage: "macwindow")
-        }
-        Divider()
-        Button {
-            onOCR()
-        } label: {
-            Label("Recognize Text", systemImage: "text.viewfinder")
-        }
     }
 }
 

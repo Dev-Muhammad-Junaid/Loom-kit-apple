@@ -216,7 +216,7 @@ private struct PendingConnectionRow: View {
             Image(systemName: deviceSystemImage)
                 .font(.system(size: 15, weight: .regular))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.orange)
+                .foregroundStyle(MirageTheme.warning)
                 .frame(width: 24, alignment: .center)
             VStack(alignment: .leading, spacing: 1) {
                 Text(connection.peerName)
@@ -231,7 +231,7 @@ private struct PendingConnectionRow: View {
                 }
             }
             Spacer()
-            
+
             HStack(spacing: 6) {
                 Button {
                     authManager.authorize(connection: connection)
@@ -242,12 +242,12 @@ private struct PendingConnectionRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Approve")
-                
+
                 Button {
                     authManager.reject(connection: connection, loomContext: loomContext)
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(MirageTheme.danger)
                         .font(.system(size: 16))
                 }
                 .buttonStyle(.plain)
