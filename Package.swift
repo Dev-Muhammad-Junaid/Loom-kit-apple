@@ -37,6 +37,10 @@ let package = Package(
             name: "LoomSharedRuntime",
             targets: ["LoomSharedRuntime"]
         ),
+        .executable(
+            name: "loom-diagnose",
+            targets: ["LoomDiagnoseCLI"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.81.0"),
@@ -86,6 +90,10 @@ let package = Package(
                 "LoomCloudKit",
             ],
             path: "Sources/LoomHost"
+        ),
+        .executableTarget(
+            name: "LoomDiagnoseCLI",
+            dependencies: ["Loom"]
         ),
         .testTarget(
             name: "LoomTests",

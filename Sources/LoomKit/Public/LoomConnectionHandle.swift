@@ -11,9 +11,13 @@ import Loom
 /// Actor-backed app-facing connection handle returned by LoomKit.
 public actor LoomConnectionHandle {
     /// Stable LoomKit connection identifier.
-    public let id: UUID
+    /// `nonisolated`: immutable and Sendable, so cross-module callers
+    /// (e.g. app-level authorization flows) can read it synchronously.
+    public nonisolated let id: UUID
     /// Snapshot of the peer this handle is connected to.
-    public let peer: LoomPeerSnapshot
+    /// `nonisolated` for the same reason — synchronous peer inspection
+    /// (name, sources, capabilities) without an actor hop.
+    public nonisolated let peer: LoomPeerSnapshot
     /// Underlying authenticated Loom session for advanced escape-hatch use.
     public let session: any LoomSessionProtocol
     /// Transfer engine bound to the authenticated session.

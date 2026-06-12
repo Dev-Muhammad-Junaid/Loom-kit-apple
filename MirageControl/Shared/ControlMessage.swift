@@ -73,10 +73,53 @@ public enum ControlMessage: Codable, Sendable {
     /// Stale IDs (after the snapshot has been superseded) are ignored.
     case triggerContextAction(id: String)
 
+    // ── Live mini mirror (WID-403) ───────────────────────────────────
+    /// iPad → Mac: start streaming low-res screen frames. `fps` caps the
+    /// capture rate (the Mac may deliver fewer under load); `maxWidth`
+    /// bounds the longest frame edge in pixels so the host downsamples
+    /// on the GPU before encoding.
+    case startMirror(fps: Int, maxWidth: Int)
+    /// iPad → Mac: stop the mirror stream. Also implied by disconnect.
+    case stopMirror
+    /// Mac → iPad: one JPEG frame. `seq` increases monotonically within a
+    /// stream so the iPad can drop out-of-order/stale frames; frames are
+    /// independent (no inter-frame state) so any frame may be dropped.
+    case mirrorFrame(seq: UInt64, data: Data)
+
+    /// iPad → Mac: "what's my authorization state?" Self-healing resync for
+    /// the approval handshake. Status pushes ride best-effort sends — if the
+    /// host's `granted` ever fails to transmit, the iPad would otherwise
+    /// wait on the approval overlay forever while the host believes the
+    /// session is live. The iPad polls this while it hasn't heard a status;
+    /// the host replies with `authorizationStatus`. While the request is
+    /// still pending the host intentionally doesn't consume messages, so
+    /// queries buffer in the handle and are answered the moment the
+    /// connection is approved — exactly the resync we want.
+    case requestAuthorizationStatus
+
+    // ── Application-level liveness ───────────────────────────────────
+    /// iPad → Mac, every ~2 s while a session is active. The transport's
+    /// own state can lag reality badly after abrupt kills (buffered
+    /// streams, half-open TCP), so liveness is proven at the protocol
+    /// level: each side trusts only recent ping/pong traffic.
+    case ping(seq: UInt64)
+    /// Mac → iPad: echo of `ping`. Missing pongs ⇒ host is gone — the
+    /// iPad returns to the picker instead of showing a zombie session.
+    /// Missing pings ⇒ iPad is gone — the host drops the connection and
+    /// stops consuming its buffered commands.
+    case pong(seq: UInt64)
+
+    /// Mac → iPad: what the host can actually DO right now. Sent when a
+    /// session starts and re-checked periodically, so the remote can show
+    /// "the Mac is missing Accessibility permission" instead of letting
+    /// taps fail silently. `accessibility` gates input injection +
+    /// dialog/menu features; `screenRecording` gates screenshots + mirror.
+    case hostCapabilities(accessibility: Bool, screenRecording: Bool)
+
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot, requestID, mode, windows, phase
+        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot, requestID, mode, windows, phase, fps, maxWidth, seq, accessibility, screenRecording
     }
 
     private enum MessageType: String, Codable {
@@ -89,6 +132,10 @@ public enum ControlMessage: Codable, Sendable {
         case requestAppMenuShortcuts, appMenuShortcutsResponse
         case runningAppsUpdate
         case uiContextUpdate, triggerContextAction
+        case startMirror, stopMirror, mirrorFrame
+        case requestAuthorizationStatus
+        case ping, pong
+        case hostCapabilities
     }
 
     public init(from decoder: Decoder) throws {
@@ -178,6 +225,29 @@ public enum ControlMessage: Codable, Sendable {
             )
         case .triggerContextAction:
             self = .triggerContextAction(id: try c.decode(String.self, forKey: .id))
+        case .startMirror:
+            self = .startMirror(
+                fps: try c.decode(Int.self, forKey: .fps),
+                maxWidth: try c.decode(Int.self, forKey: .maxWidth)
+            )
+        case .stopMirror:
+            self = .stopMirror
+        case .mirrorFrame:
+            self = .mirrorFrame(
+                seq: try c.decode(UInt64.self, forKey: .seq),
+                data: try c.decode(Data.self, forKey: .data)
+            )
+        case .requestAuthorizationStatus:
+            self = .requestAuthorizationStatus
+        case .ping:
+            self = .ping(seq: try c.decode(UInt64.self, forKey: .seq))
+        case .pong:
+            self = .pong(seq: try c.decode(UInt64.self, forKey: .seq))
+        case .hostCapabilities:
+            self = .hostCapabilities(
+                accessibility: try c.decode(Bool.self, forKey: .accessibility),
+                screenRecording: try c.decode(Bool.self, forKey: .screenRecording)
+            )
         }
     }
 
@@ -261,6 +331,28 @@ public enum ControlMessage: Codable, Sendable {
         case let .triggerContextAction(id):
             try c.encode(MessageType.triggerContextAction, forKey: .type)
             try c.encode(id, forKey: .id)
+        case let .startMirror(fps, maxWidth):
+            try c.encode(MessageType.startMirror, forKey: .type)
+            try c.encode(fps, forKey: .fps)
+            try c.encode(maxWidth, forKey: .maxWidth)
+        case .stopMirror:
+            try c.encode(MessageType.stopMirror, forKey: .type)
+        case let .mirrorFrame(seq, data):
+            try c.encode(MessageType.mirrorFrame, forKey: .type)
+            try c.encode(seq, forKey: .seq)
+            try c.encode(data, forKey: .data)
+        case .requestAuthorizationStatus:
+            try c.encode(MessageType.requestAuthorizationStatus, forKey: .type)
+        case let .ping(seq):
+            try c.encode(MessageType.ping, forKey: .type)
+            try c.encode(seq, forKey: .seq)
+        case let .pong(seq):
+            try c.encode(MessageType.pong, forKey: .type)
+            try c.encode(seq, forKey: .seq)
+        case let .hostCapabilities(accessibility, screenRecording):
+            try c.encode(MessageType.hostCapabilities, forKey: .type)
+            try c.encode(accessibility, forKey: .accessibility)
+            try c.encode(screenRecording, forKey: .screenRecording)
         }
     }
 }

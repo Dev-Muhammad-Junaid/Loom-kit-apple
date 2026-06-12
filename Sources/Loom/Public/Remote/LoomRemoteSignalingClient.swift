@@ -496,7 +496,7 @@ public final class LoomRemoteSignalingClient {
         ),
               let sig = try? identityManager.sign(workerPayload) else { return nil }
 
-        var headers: [(String, String)] = [
+        let headers: [(String, String)] = [
             ("\(headerPrefix)-session-id", sessionID),
             ("\(headerPrefix)-app-id", appAuth.appID),
             ("\(headerPrefix)-app-timestamp-ms", "\(timestampMs)"),

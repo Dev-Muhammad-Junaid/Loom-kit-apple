@@ -94,6 +94,15 @@ actor BonjourAdvertiser {
                         continuationBox.resume(returning: port)
                     }
                 case let .failed(error):
+                    // Production-actionable logging for authorization
+                    // denials (WID-333); harmless duplicate context for
+                    // other failures since the error is also thrown.
+                    if let serviceType = self?.serviceType,
+                       let guidance = LoomLocalNetworkDiagnostics.guidance(
+                           for: error, serviceType: serviceType
+                       ) {
+                        LoomLogger.error(.discovery, "Advertising failed: \(guidance)")
+                    }
                     Task { await self?.setAdvertising(false) }
                     continuationBox.resume(throwing: error)
                 case let .waiting(error):

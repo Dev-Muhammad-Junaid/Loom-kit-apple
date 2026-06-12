@@ -15,7 +15,15 @@ struct MirageControlApp: App {
             for: LoomContainerConfiguration(
                 serviceType: "_miragecontrol._tcp",
                 serviceName: UIDevice.current.name,
-                deviceIDSuiteName: "MirageControlLoomStore"
+                deviceIDSuiteName: "MirageControlLoomStore",
+                // Same-iCloud awareness: this device publishes its identity
+                // to the user's private CloudKit DB; Macs on the same
+                // account surface with `.cloudKitOwn` → "My Mac" badge,
+                // priority sort, and host-side auto-allow (MirageCloud).
+                cloudKit: MirageCloud.cloudKitConfiguration,
+                remoteSignaling: MirageCloud.remoteSignalingConfiguration,
+                // Manual lifecycle only — see MacHostApp for rationale.
+                retryPolicy: .disabled
             )
         )
     }

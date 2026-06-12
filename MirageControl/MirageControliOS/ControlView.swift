@@ -65,6 +65,43 @@ struct ControlView: View {
     @State private var isWindowListLoading = false
     @State private var windowListRequestID: String?
 
+    // ── Live mini mirror (WID-403) ──────────────────────────────────
+    /// Whether the user has the floating mirror thumbnail enabled. Drives
+    /// startMirror/stopMirror on the wire and the overlay's visibility.
+    @State private var isMirrorActive = false
+    /// Latest decoded mirror frame. Replaced wholesale per frame — at
+    /// ~480px these are ~1 MB decoded, and only one is ever retained.
+    @State private var mirrorImage: UIImage?
+    /// Highest sequence number rendered; lower/equal arrivals are stale
+    /// (shouldn't happen on an ordered transport, but cheap to guard).
+    @State private var mirrorLastSeq: UInt64 = 0
+
+    /// `true` once any `authorizationStatus` has arrived from the host.
+    /// Gates the resync poll below — we stop asking once we've heard
+    /// anything, because from then on pushes are flowing.
+    @State private var hasReceivedAuthStatus = false
+    /// Last status received — keeps a "denied" verdict from being stomped
+    /// by a liveness timeout.
+    @State private var lastAuthStatus = "pending"
+
+    // ── Liveness heartbeat ──────────────────────────────────────────
+    /// Time the last pong arrived. The heartbeat loop sends a ping every
+    /// 2 s; if no pong lands within the timeout the host is provably gone
+    /// (quit, crashed, network dropped) and we bounce to the picker —
+    /// regardless of what the transport's cached state claims.
+    @State private var lastPongAt: Date?
+    /// Set once any pong arrives; before that the timeout isn't enforced
+    /// (covers connecting to an older host build that doesn't speak ping).
+    @State private var heartbeatEstablished = false
+
+    // ── Host capabilities ───────────────────────────────────────────
+    /// What the Mac can actually execute right now, as reported by the
+    /// host on session start and refreshed periodically. `nil` = not yet
+    /// reported. Drives the warning banner so "nothing happens" always
+    /// has a visible reason.
+    @State private var hostAccessibilityGranted: Bool?
+    @State private var hostScreenRecordingGranted: Bool?
+
     /// Drives post-arrival routing for `screenshotData`. Each tap path sets
     /// the matching intent so the response flows into the right UI without
     /// a global "what was the last button?" state machine.
@@ -101,6 +138,20 @@ struct ControlView: View {
 
                 if let sender {
                     VStack(spacing: 0) {
+                        // Host-permission warnings: the host reports what it
+                        // can execute; missing permissions show here instead
+                        // of taps failing silently.
+                        if hostAccessibilityGranted == false {
+                            HostCapabilityBanner(
+                                text: "The Mac is missing Accessibility permission — mouse, keyboard, and shortcuts won't work. Fix it in the Mac's menu bar panel."
+                            )
+                        }
+                        if hostScreenRecordingGranted == false {
+                            HostCapabilityBanner(
+                                text: "The Mac is missing Screen Recording permission — screenshots and the live mirror won't work."
+                            )
+                        }
+
                         tabSwitcher
                             .padding(.horizontal, 16)
                             .padding(.vertical, 14)
@@ -134,12 +185,35 @@ struct ControlView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            // Floating live-mirror thumbnail (WID-403). Sits above both
+            // tabs so the user can keep an eye on the Mac while driving
+            // the trackpad or the shortcut deck.
+            .overlay(alignment: .bottomTrailing) {
+                if isMirrorActive {
+                    MirrorThumbnailView(
+                        image: mirrorImage,
+                        onClose: { toggleMirror() },
+                        onExpansionChanged: { expanded in
+                            renegotiateMirror(expanded: expanded)
+                        }
+                    )
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 96)   // clear the gesture button bar
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: isMirrorActive)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 2) {
+                        // Long Mac names ("Junaid's MacBook Pro (16-inch,
+                        // 2023)") overflow the principal toolbar slot —
+                        // middle truncation keeps both the owner and model.
                         Text(peerName)
                             .font(.headline)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                         HStack(spacing: 4) {
                             Circle()
                                 .fill(MirageTheme.success)
@@ -149,6 +223,18 @@ struct ControlView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    // Live mini mirror toggle (WID-403).
+                    Button {
+                        toggleMirror()
+                    } label: {
+                        Image(systemName: isMirrorActive
+                              ? "rectangle.fill.on.rectangle.fill"
+                              : "rectangle.on.rectangle")
+                    }
+                    .tint(isMirrorActive ? MirageTheme.violet : nil)
+                    .accessibilityLabel(isMirrorActive ? "Stop live mirror" : "Start live mirror")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     CaptureCapsule(
@@ -202,6 +288,11 @@ struct ControlView: View {
                     }
                 }
             }
+            // Release the captured image once the preview is fully gone.
+            // A native-resolution capture of a 5K display decodes to
+            // ~50 MB; holding it in @State after dismissal kept that
+            // memory resident until the *next* capture overwrote it.
+            .onDisappear { screenshotImage = nil }
         }
         .alert("Screenshot Failed", isPresented: Binding(
             get: { screenshotErrorMessage != nil },
@@ -264,6 +355,54 @@ struct ControlView: View {
             }
             // Then request fresh list from Mac
             Task { await s.requestAppList() }
+
+            // ── Authorization resync poll ───────────────────────────
+            // The host pushes `authorizationStatus`, and the handle's
+            // message stream buffers, so the normal path never loses it.
+            // But the push itself is a network send that can fail — and a
+            // lost `granted` would strand this view on the approval
+            // overlay while the Mac thinks the session is live. Poll
+            // until the first status arrives; queries sent while we're
+            // still pending sit buffered host-side and are answered the
+            // moment approval lands. Bounded at 20 attempts (~60 s, past
+            // the host's 45 s pending expiry) so the loop always
+            // terminates even if the view outlives a dead connection.
+            Task {
+                for _ in 0..<20 {
+                    guard !hasReceivedAuthStatus else { break }
+                    await s.requestAuthorizationStatus()
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
+
+            // ── Liveness heartbeat ──────────────────────────────────
+            // Ping every 2 s; declare the host dead after ~6 s of pong
+            // silence (three missed beats). Structured child of .task,
+            // so view teardown cancels it cleanly — no phantom
+            // disconnects from replaced views.
+            let heartbeat = Task {
+                var seq: UInt64 = 0
+                while !Task.isCancelled {
+                    seq &+= 1
+                    await s.sendPing(seq: seq)
+                    try? await Task.sleep(for: .seconds(2))
+                    guard !Task.isCancelled else { return }
+                    let silent = await MainActor.run { () -> Bool in
+                        guard heartbeatEstablished, let lastPongAt else { return false }
+                        return Date().timeIntervalSince(lastPongAt) > 6
+                    }
+                    if silent {
+                        await MainActor.run {
+                            if lastAuthStatus != "denied" {
+                                onAuthStatusChanged("host_disconnected")
+                            }
+                        }
+                        return
+                    }
+                }
+            }
+            defer { heartbeat.cancel() }
+
             // Single consolidated message loop — no competing consumers
             await listenForHostMessages()
         }
@@ -296,7 +435,7 @@ struct ControlView: View {
         for await data in connection.messages {
             let message: ControlMessage
             do {
-                message = try JSONDecoder().decode(ControlMessage.self, from: data)
+                message = try ControlMessageCoding.decoder.decode(ControlMessage.self, from: data)
             } catch {
                 #if DEBUG
                 print("MirageControliOS: ⚠️ Failed to decode ControlMessage (\(data.count)B): \(error)")
@@ -306,9 +445,41 @@ struct ControlView: View {
             #if DEBUG
             print("MirageControliOS: 📥 \(data.count)B \(messageTypeName(message))")
             #endif
+            // Mirror frames are the only high-rate inbound payload (≤20/s)
+            // and JPEG decode is the heavy part — handle them here on the
+            // listener task so decode stays off the main thread, and only
+            // hop to MainActor for the cheap state swap.
+            if case let .mirrorFrame(seq, frameData) = message {
+                guard let decoded = UIImage(data: frameData)?.preparingForDisplay() else { continue }
+                await MainActor.run {
+                    guard isMirrorActive else { return }
+                    // Ordered transport: a sequence REGRESSION can only mean
+                    // the host restarted the stream (quality re-negotiation),
+                    // so adopt the new numbering. Only exact duplicates drop.
+                    guard seq != mirrorLastSeq else { return }
+                    mirrorLastSeq = seq
+                    mirrorImage = decoded
+                }
+                continue
+            }
             await MainActor.run {
                 switch message {
+                case .pong:
+                    lastPongAt = Date()
+                    heartbeatEstablished = true
+
+                case let .hostCapabilities(accessibility, screenRecording):
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        hostAccessibilityGranted = accessibility
+                        hostScreenRecordingGranted = screenRecording
+                    }
+
                 case let .authorizationStatus(status):
+                    #if DEBUG
+                    print("MirageControliOS: 🔑 authorizationStatus = \(status) (on the handle this ControlView holds)")
+                    #endif
+                    hasReceivedAuthStatus = true
+                    lastAuthStatus = status
                     onAuthStatusChanged(status)
 
                 case let .activeAppUpdate(name, bundleID):
@@ -361,6 +532,17 @@ struct ControlView: View {
                     }
 
                 case let .screenshotError(requestID, message):
+                    // The mirror stream reuses this channel with a fixed
+                    // token: stop the mirror and surface the reason rather
+                    // than letting the stale-request guard eat it.
+                    if requestID == "mirror" {
+                        if isMirrorActive {
+                            isMirrorActive = false
+                            mirrorImage = nil
+                            screenshotErrorMessage = message
+                        }
+                        break
+                    }
                     guard requestID == screenshotRequestID else {
                         #if DEBUG
                         print("MirageControliOS: ⏭️ dropping stale screenshotError (\(requestID))")
@@ -430,6 +612,47 @@ struct ControlView: View {
                     break
                 }
             }
+        }
+
+        // No stream-end inference here. Liveness is decided by exactly one
+        // mechanism — the ping/pong heartbeat above — which can't misfire
+        // on view replacement (it's a structured child of this view's
+        // .task) and detects every real death within seconds, including
+        // abrupt host kills the transport never notices. ContentRootView's
+        // events loop still handles explicit `.disconnected` events.
+    }
+
+    // MARK: - Live mirror control (WID-403)
+
+
+    /// Flips the mirror on/off: updates local UI state immediately for
+    /// responsiveness, then tells the Mac. Frame state is reset on stop so
+    /// a later restart begins with the loading placeholder, and the last
+    /// (~1 MB decoded) frame isn't retained while the mirror is hidden.
+    private func toggleMirror() {
+        guard let sender else { return }
+        isMirrorActive.toggle()
+        if isMirrorActive {
+            mirrorLastSeq = 0
+            mirrorImage = nil
+            Task { await sender.startMirror() }
+        } else {
+            mirrorImage = nil
+            Task { await sender.stopMirror() }
+        }
+    }
+
+    /// Re-negotiates the mirror stream resolution to match the thumbnail
+    /// size: 640px compact, 1024px expanded (sharp text at the 340 pt
+    /// Retina width). Stop+start is cheap — a sub-second hiccup — and the
+    /// sequence counter resets with the new stream so fresh frames aren't
+    /// dropped as stale.
+    private func renegotiateMirror(expanded: Bool) {
+        guard let sender, isMirrorActive else { return }
+        mirrorLastSeq = 0
+        Task {
+            await sender.stopMirror()
+            await sender.startMirror(maxWidth: expanded ? 1024 : 640)
         }
     }
 
@@ -541,6 +764,31 @@ struct ControlView: View {
             height: Float(rect.height)
         )
         beginCapture(intent: .regionFinal, mode: mode)
+    }
+}
+
+// MARK: - Host capability banner
+
+/// Compact warning strip shown when the host reports a missing macOS
+/// permission. The remote can't fix it, but it CAN say why nothing works.
+private struct HostCapabilityBanner: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.orange)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.orange.opacity(0.12))
+        .transition(.opacity)
     }
 }
 

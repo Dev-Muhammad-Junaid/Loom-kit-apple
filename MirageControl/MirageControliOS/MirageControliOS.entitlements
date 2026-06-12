@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Same-iCloud device awareness (disabled — requires a paid developer
+	     account). Uncomment together with MirageCloud.isCloudEnabled once
+	     the container is registered in the developer portal.
+
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.miragecontrol.shared</string>
+	</array>
+	-->
+
+</dict>
+</plist>

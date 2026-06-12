@@ -32,9 +32,15 @@ struct PeerPickerView: View {
                     emptyState
                     Spacer()
                 } else {
+                    // The user's own iCloud Macs first (stable within each
+                    // group thanks to the query's name sort) — they're the
+                    // ones that connect without an approval prompt.
+                    let orderedPeers = peers.sorted {
+                        ($0.isSameICloudDevice ? 0 : 1, $0.name) < ($1.isSameICloudDevice ? 0 : 1, $1.name)
+                    }
                     List {
                         Section {
-                            ForEach(peers) { peer in
+                            ForEach(orderedPeers) { peer in
                                 PeerRow(
                                     peer: peer,
                                     isConnecting: connecting == peer.deviceID
@@ -151,9 +157,24 @@ private struct PeerRow: View {
                     .frame(width: 36, height: 36)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(peer.name)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
+                    HStack(spacing: 6) {
+                        Text(peer.name)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        // Provably the user's own device (private CloudKit
+                        // DB record) — connects without an approval prompt.
+                        if peer.isSameICloudDevice {
+                            Label("My Mac", systemImage: "icloud.fill")
+                                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                .foregroundStyle(MirageTheme.violet)
+                                .labelStyle(.titleAndIcon)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    Capsule().fill(MirageTheme.violet.opacity(0.12))
+                                )
+                        }
+                    }
                     HStack(spacing: 5) {
                         Circle()
                             .fill(peer.isNearby ? MirageTheme.success : Color.orange)

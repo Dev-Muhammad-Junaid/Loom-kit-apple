@@ -389,13 +389,26 @@ actor LoomStore {
         }
 
         if hasActiveConnection(for: peerSnapshot.id) {
-            if let existing = connections.first(where: { $0.value.peerSnapshot.id == peerSnapshot.id }) {
+            // Reuse only a connection that is actually .connected. Returning
+            // a .stale / .reconnecting zombie here dead-ends an explicit
+            // reconnect: the caller gets a handle whose streams already
+            // finished, while the real peer (e.g. a relaunched host) waits
+            // for a dial that never happens. An explicit connect(to:) is a
+            // clear statement of user intent — tear the zombie down and
+            // dial fresh.
+            if let existing = connections.first(where: { $0.value.peerSnapshot.id == peerSnapshot.id }),
+               connectionSnapshots[existing.key]?.state == .connected {
                 LoomLogger.debug(
                     .transport,
-                    "LoomKit returning existing connection for \(peerSnapshot.name)"
+                    "LoomKit returning existing connected session for \(peerSnapshot.name)"
                 )
                 return existing.value.handle
             }
+            LoomLogger.log(
+                .transport,
+                "LoomKit explicit connect to \(peerSnapshot.name): replacing non-connected session with a fresh dial"
+            )
+            await replaceExistingConnection(for: peerSnapshot.id)
         }
 
         let resolvedPeer = currentPeerSnapshot(for: peerSnapshot.id) ?? peerSnapshot

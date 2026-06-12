@@ -15,6 +15,19 @@ import Foundation
 /// Skips the assertion when running inside a test runner (XCTest or Swift Testing)
 /// to avoid crashing the test process for tests that exercise Bonjour codepaths.
 func validateBonjourInfoPlistKeys(serviceType: String) {
+    // Non-bundled executables (CLI tools, daemons) have no Info.plist and
+    // macOS doesn't require these keys for them — only bundled apps do.
+    guard Bundle.main.bundleIdentifier != nil else { return }
+
+    // Production-safe path (WID-333): log structured findings through the
+    // package logger in every build configuration, so a misconfigured
+    // release build explains itself in Console.app instead of failing with
+    // an opaque -65555. The DEBUG assertions below stay for loud,
+    // can't-miss feedback during development.
+    if !isRunningInTestContext {
+        LoomLocalNetworkDiagnostics.reportIfMisconfigured(serviceType: serviceType)
+    }
+
     #if DEBUG
     guard !isRunningInTestContext else { return }
 

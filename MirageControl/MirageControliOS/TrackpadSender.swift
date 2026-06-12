@@ -211,6 +211,31 @@ actor TrackpadSender {
         await send(.requestAppList)
     }
 
+    /// Resync query for the approval handshake — see
+    /// `ControlMessage.requestAuthorizationStatus`.
+    func requestAuthorizationStatus() async {
+        await send(.requestAuthorizationStatus)
+    }
+
+    /// Liveness heartbeat — see `ControlMessage.ping`.
+    func sendPing(seq: UInt64) async {
+        await send(.ping(seq: seq))
+    }
+
+    // MARK: - Live mini mirror (WID-403)
+
+    /// Asks the Mac to start streaming low-res screen frames. The default
+    /// 640px @ 20 fps keeps frames in the 20–50 KB range — smooth on LAN,
+    /// far below anything that could starve the 120 Hz input path. The
+    /// expanded thumbnail re-negotiates at a higher width (see ControlView).
+    func startMirror(fps: Int = 20, maxWidth: Int = 640) async {
+        await send(.startMirror(fps: fps, maxWidth: maxWidth))
+    }
+
+    func stopMirror() async {
+        await send(.stopMirror)
+    }
+
     /// Maps 3-finger swipe directions to the same keyboard shortcuts
     /// that macOS uses for trackpad gestures.
     func sendThreeFingerSwipe(_ direction: TrackpadGestureKind.ThreeFingerDirection) async {

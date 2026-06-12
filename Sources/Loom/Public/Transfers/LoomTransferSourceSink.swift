@@ -25,6 +25,19 @@ public protocol LoomTransferSink: Sendable {
     func finalize(offer: LoomTransferOffer, bytesWritten: UInt64) async throws
 }
 
+/// Optional sink capability: read back previously written bytes.
+///
+/// WID-342: resumed transfers can only be integrity-verified end-to-end if
+/// the engine can rebuild the running SHA-256 over the bytes that were
+/// written in the *previous* session. Sinks that adopt this protocol get
+/// full integrity verification on resume; sinks that don't fall back to
+/// the historical behavior (resumed transfers skip hash verification,
+/// now explicitly logged).
+public protocol LoomReadableTransferSink: LoomTransferSink {
+    /// Reads back a chunk of previously written content.
+    func readWritten(offset: UInt64, maxLength: Int) async throws -> Data
+}
+
 /// URL-backed transfer source that reads from a file on disk without buffering the whole file.
 public actor LoomFileTransferSource: LoomTransferSource {
     /// File URL read by this transfer source.
@@ -53,11 +66,14 @@ public actor LoomFileTransferSource: LoomTransferSource {
 }
 
 /// URL-backed transfer sink that writes sequential chunks into a file on disk.
-public actor LoomFileTransferSink: LoomTransferSink {
+public actor LoomFileTransferSink: LoomTransferSink, LoomReadableTransferSink {
     /// File URL written by this transfer sink.
     public let url: URL
 
     private let handle: FileHandle
+    /// Lazily opened read handle for resume-rehash (WID-342). Separate from
+    /// the write handle so seeks for verification never disturb write position.
+    private var readHandle: FileHandle?
 
     public init(url: URL) throws {
         self.url = url
@@ -69,6 +85,7 @@ public actor LoomFileTransferSink: LoomTransferSink {
 
     deinit {
         try? handle.close()
+        try? readHandle?.close()
     }
 
     public func truncate(to byteCount: UInt64) async throws {
@@ -78,6 +95,15 @@ public actor LoomFileTransferSink: LoomTransferSink {
     public func write(_ data: Data, at offset: UInt64) async throws {
         try handle.seek(toOffset: offset)
         try handle.write(contentsOf: data)
+    }
+
+    public func readWritten(offset: UInt64, maxLength: Int) async throws -> Data {
+        if readHandle == nil {
+            readHandle = try FileHandle(forReadingFrom: url)
+        }
+        guard let readHandle else { return Data() }
+        try readHandle.seek(toOffset: offset)
+        return try readHandle.read(upToCount: maxLength) ?? Data()
     }
 
     public func finalize(offer _: LoomTransferOffer, bytesWritten _: UInt64) async throws {}

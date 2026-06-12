@@ -11,7 +11,7 @@ struct TrackpadView: View {
     let sender: TrackpadSender
     let colorScheme: ColorScheme
 
-    @State private var sensitivity: Float = 1.75
+    @State private var sensitivity: Float = TrackpadSensitivity.defaultValue
     @State private var scrollMode: Bool = false
     @State private var activeGesture: TrackpadGestureKind?
     @State private var ripplePos: CGPoint?
@@ -132,26 +132,45 @@ struct TrackpadView: View {
             .padding(.top, 16)
 
             // ── Sensitivity slider ────────────────────────────────────
-            // Snaps to the same notches the readout label exposes so the
-            // displayed multiplier is always exactly what the user sees.
-            HStack(spacing: 8) {
-                Image(systemName: "tortoise")
-                    .foregroundStyle(Color.secondary)
-                    .font(.system(size: 12))
-                Slider(
-                    value: $sensitivity,
-                    in: TrackpadSensitivity.range,
-                    step: TrackpadSensitivity.step
-                )
-                .tint(Color.primary.opacity(0.6))
-                Image(systemName: "hare")
-                    .foregroundStyle(Color.secondary)
-                    .font(.system(size: 12))
-                Text(TrackpadSensitivity.label(for: sensitivity))
-                    .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 36, alignment: .trailing)
-                    .accessibilityLabel("Sensitivity \(TrackpadSensitivity.label(for: sensitivity))")
+            // Index-driven over a small set of labeled anchors (WID-405):
+            // every notch is a distinct, recognizable speed and the tick
+            // labels make the current level readable at a glance.
+            VStack(spacing: 2) {
+                HStack(spacing: 8) {
+                    Image(systemName: "tortoise")
+                        .foregroundStyle(Color.secondary)
+                        .font(.system(size: 12))
+                    Slider(
+                        value: Binding(
+                            get: { Double(TrackpadSensitivity.nearestIndex(to: sensitivity)) },
+                            set: { sensitivity = TrackpadSensitivity.anchors[Int($0.rounded())] }
+                        ),
+                        in: TrackpadSensitivity.indexRange,
+                        step: 1
+                    )
+                    .tint(Color.primary.opacity(0.6))
+                    Image(systemName: "hare")
+                        .foregroundStyle(Color.secondary)
+                        .font(.system(size: 12))
+                    Text(TrackpadSensitivity.label(for: sensitivity))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(Color.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                        .accessibilityLabel("Sensitivity \(TrackpadSensitivity.label(for: sensitivity))")
+                }
+                // Tick labels aligned under the slider track.
+                HStack {
+                    ForEach(TrackpadSensitivity.anchors, id: \.self) { anchor in
+                        Text(TrackpadSensitivity.label(for: anchor))
+                            .font(.system(size: 9, weight: anchor == sensitivity ? .semibold : .regular, design: .rounded))
+                            .foregroundStyle(anchor == sensitivity ? Color.primary.opacity(0.7) : Color.secondary.opacity(0.6))
+                        if anchor != TrackpadSensitivity.anchors.last {
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(.leading, 26)   // clear the tortoise icon
+                .padding(.trailing, 70)  // clear the hare icon + readout
             }
             .padding(.horizontal, 28)
             .padding(.top, 8)
@@ -313,16 +332,39 @@ private struct ScrollToggleButton: View {
 
 /// Discrete sensitivity stops + readout formatting. Centralized so the
 /// slider, the label, and any future settings UI agree on the same set.
+///
+/// WID-405: the control snaps to a small set of labeled anchors instead of
+/// a near-continuous 0.25 step, so the current level is readable at a
+/// glance and each notch is a meaningfully different input feel.
 enum TrackpadSensitivity {
-    static let range: ClosedRange<Float> = 0.5...4.0
-    static let step: Float = 0.25
+    /// Recommended anchors per WID-405. Keep sorted ascending.
+    static let anchors: [Float] = [0.75, 1.0, 1.5, 2.0, 3.0]
+    static let defaultValue: Float = 1.5
+
+    /// Index range for an index-driven Slider over `anchors`.
+    static let indexRange: ClosedRange<Double> = 0...Double(anchors.count - 1)
 
     static func label(for value: Float) -> String {
-        let snapped = (value * 4).rounded() / 4   // match the 0.25 step
+        let snapped = anchors[nearestIndex(to: value)]
         if snapped == snapped.rounded() {
             return "\(Int(snapped))×"
         }
         return String(format: "%.2g×", snapped)
+    }
+
+    /// Index of the anchor closest to an arbitrary stored value, so old
+    /// persisted sensitivities map onto the new stepped scale.
+    static func nearestIndex(to value: Float) -> Int {
+        var best = 0
+        var bestDist = Float.greatestFiniteMagnitude
+        for (i, anchor) in anchors.enumerated() {
+            let d = abs(anchor - value)
+            if d < bestDist {
+                bestDist = d
+                best = i
+            }
+        }
+        return best
     }
 }
 
@@ -331,21 +373,36 @@ enum TrackpadSensitivity {
 enum GestureHaptic {
     case light, medium, heavy, double, selection
 
+    // Pre-allocated, process-lifetime generators. Constructing a
+    // UIImpactFeedbackGenerator per trigger (the old pattern, ~40 call
+    // sites) both churns the allocator and skips the Taptic Engine
+    // warm-up, making the first pulse of each press feel late.
+    @MainActor private static let lightGen = UIImpactFeedbackGenerator(style: .light)
+    @MainActor private static let mediumGen = UIImpactFeedbackGenerator(style: .medium)
+    @MainActor private static let heavyGen = UIImpactFeedbackGenerator(style: .heavy)
+    @MainActor private static let selectionGen = UISelectionFeedbackGenerator()
+
     @MainActor
     func trigger() {
         switch self {
         case .light:
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            Self.lightGen.impactOccurred()
+            Self.lightGen.prepare()
         case .medium:
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Self.mediumGen.impactOccurred()
+            Self.mediumGen.prepare()
         case .heavy:
-            UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+            Self.heavyGen.impactOccurred()
+            Self.heavyGen.prepare()
         case .selection:
-            UISelectionFeedbackGenerator().selectionChanged()
+            Self.selectionGen.selectionChanged()
+            Self.selectionGen.prepare()
         case .double:
-            let g = UIImpactFeedbackGenerator(style: .medium)
-            g.impactOccurred()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { g.impactOccurred() }
+            Self.mediumGen.impactOccurred()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                Self.mediumGen.impactOccurred()
+                Self.mediumGen.prepare()
+            }
         }
     }
 }

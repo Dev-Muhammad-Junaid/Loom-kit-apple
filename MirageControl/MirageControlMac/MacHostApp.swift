@@ -3,6 +3,7 @@
 //  MirageControlMac
 //
 
+import Loom
 import LoomKit
 import SystemConfiguration
 import SwiftUI
@@ -34,7 +35,22 @@ final class MacDaemon: ObservableObject {
                 for: LoomContainerConfiguration(
                     serviceType: "_miragecontrol._tcp",
                     serviceName: Self.computerName(),
-                    deviceIDSuiteName: "MirageControlLoomStore"
+                    deviceIDSuiteName: "MirageControlLoomStore",
+                    // Same-iCloud awareness: publishes this Mac's identity
+                    // to the user's private CloudKit DB and merges the
+                    // user's other devices into the peer view, so incoming
+                    // connections from the user's own devices carry the
+                    // `.cloudKitOwn` source (see MirageCloud).
+                    cloudKit: MirageCloud.cloudKitConfiguration,
+                    // Over-the-internet reachability: plumbed through, but
+                    // inert until a relay is deployed (returns nil today).
+                    remoteSignaling: MirageCloud.remoteSignalingConfiguration,
+                    // No transport-level auto-retry: connection lifecycle is
+                    // owned entirely by the app (explicit connect, ping/pong
+                    // liveness). Retry created overlapping reconnect state
+                    // machines (.stale/.reconnecting zombies) that fought
+                    // the manual flow.
+                    retryPolicy: .disabled
                 )
             )
         } catch {
@@ -51,6 +67,9 @@ final class MacDaemon: ObservableObject {
         DeviceAuthorizationManager.shared.onDeviceAuthorized = { [weak receiver] handle in
             receiver?.observeConnection(handle)
         }
+        DeviceAuthorizationManager.shared.onConnectionRevoked = { [weak receiver] connectionID in
+            receiver?.cancelConsumption(connectionID: connectionID)
+        }
         
         Task {
             // Defer notification request until NSApplication is fully launched
@@ -65,6 +84,22 @@ final class MacDaemon: ObservableObject {
                 MirageLog.app.info("Starting LoomContext")
                 try await context.start()
                 MirageLog.app.info("LoomContext started")
+
+                // Publish signaling-backed remote reachability when a relay
+                // is configured, so the user's devices can join from outside
+                // the local network. Session ID is derived from the device
+                // ID: stable across launches, no coordination needed.
+                if MirageCloud.remoteSignalingConfiguration != nil {
+                    do {
+                        let deviceID = LoomSharedDeviceID.getOrCreate(suiteName: "MirageControlLoomStore")
+                        let sessionID = "miragecontrol-\(deviceID.uuidString)"
+                        try await context.publishRemoteReachability(sessionID: sessionID)
+                        MirageLog.app.info("Published remote reachability")
+                    } catch {
+                        // Remote joins unavailable; local operation unaffected.
+                        MirageLog.app.error("Remote reachability publish failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
             } catch {
                 MirageLog.app.fault("LoomContext start failed: \(error.localizedDescription, privacy: .public)")
                 await MainActor.run {
@@ -83,8 +118,8 @@ final class MacDaemon: ObservableObject {
             // doesn't notice — pending requests are still tracked by the
             // handle ID and resolved through `pendingHandles`.
             for await handle in context.incomingConnections {
-                let id = await handle.id
-                let peer = await handle.peer
+                let id = handle.id
+                let peer = handle.peer
                 MirageLog.connection.info("Incoming connection \(id, privacy: .public) from \(peer.name, privacy: .public)")
 
                 let snapshot = LoomConnectionSnapshot(
@@ -99,6 +134,11 @@ final class MacDaemon: ObservableObject {
 
                 await DeviceAuthorizationManager.shared.handleIncomingConnection(snapshot, handle: handle)
             }
+            // This loop should live as long as the process. If it ever
+            // exits, the host silently stops answering connection requests
+            // while still advertising on Bonjour — iPads would wait on
+            // "pending" forever. Make that state loud in the logs.
+            MirageLog.connection.fault("incomingConnections stream ended — host will no longer accept new connections")
         }
 
         Task {
@@ -134,6 +174,7 @@ struct MacHostApp: App {
                 MacMenuBarView(receiver: daemon.receiver)
                     .loomContainer(container, autostart: false)
                     .environmentObject(DeviceAuthorizationManager.shared)
+                    .environmentObject(daemon)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("MirageControl failed to start")

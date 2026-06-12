@@ -111,6 +111,11 @@ public final class LoomIncomingTransfer: @unchecked Sendable {
 
 /// Generic resumable bulk object transfer layered on an authenticated Loom session.
 public actor LoomTransferEngine {
+    /// Chunk size for rebuilding the running hash over a resumed prefix
+    /// (WID-342). 1 MiB keeps peak memory flat while staying fast enough
+    /// that even multi-GB prefixes rehash in seconds.
+    private static let resumeRehashChunkSize = 1 << 20
+
     /// Authenticated Loom session used for encrypted control and data streams.
     public let session: any LoomSessionProtocol
     /// Transfer scheduling configuration used by the engine.
@@ -358,13 +363,48 @@ public actor LoomTransferEngine {
         state.bytesReceived = resumeOffset
         state.isAccepted = true
         state.expectedSHA256Hex = state.offer.sha256Hex
-        if resumeOffset == 0 {
-            state.receivedHasher = SHA256()
-        }
         state.acceptedAt = Date()
-        incomingTransfersByID[id] = state
 
         try await sink.truncate(to: resumeOffset)
+
+        if resumeOffset == 0 {
+            state.receivedHasher = SHA256()
+        } else if state.expectedSHA256Hex != nil {
+            // WID-342: rebuild the running hash over the prefix written in
+            // the previous session so resumed transfers keep the same
+            // end-to-end integrity guarantee as fresh ones. Incremental,
+            // bounded chunks — never the whole prefix in memory.
+            if let readable = sink as? LoomReadableTransferSink {
+                var hasher = SHA256()
+                var offset: UInt64 = 0
+                while offset < resumeOffset {
+                    let chunkLength = Int(min(UInt64(Self.resumeRehashChunkSize), resumeOffset - offset))
+                    let chunk = try await readable.readWritten(offset: offset, maxLength: chunkLength)
+                    guard !chunk.isEmpty else {
+                        // The sink holds fewer bytes than the negotiated
+                        // resume offset — the local prefix is unusable.
+                        recordTransferStep("loom.transfer.resume_rehash_short_read")
+                        throw LoomTransferError.protocolViolation(
+                            "Resume offset \(resumeOffset) exceeds readable sink content (short read at \(offset))."
+                        )
+                    }
+                    hasher.update(data: chunk)
+                    offset += UInt64(chunk.count)
+                }
+                state.receivedHasher = hasher
+                recordTransferStep("loom.transfer.resume_rehash")
+            } else {
+                // Historical behavior, now explicit in the logs: without
+                // read-back the resumed portion can't be folded into the
+                // digest, so final verification is skipped.
+                recordTransferStep("loom.transfer.resume_unverified_sink")
+                LoomLogger.log(
+                    .transfer,
+                    "Resumed Loom transfer logicalName=\(state.offer.logicalName) cannot be integrity-verified: sink does not adopt LoomReadableTransferSink"
+                )
+            }
+        }
+        incomingTransfersByID[id] = state
         state.handle.yield(progress(for: state.offer, bytesTransferred: resumeOffset, state: .waitingForAcceptance))
         recordTransferStep("loom.transfer.accept.\(resumeMode(for: resumeOffset))")
         LoomLogger.debug(
@@ -632,8 +672,10 @@ public actor LoomTransferEngine {
         if state.bytesReceived != state.offer.byteLength {
             throw LoomTransferError.protocolViolation("Received Loom transfer byte count did not match the offer length.")
         }
-        if state.resumeOffset == 0,
-           let expectedSHA = state.expectedSHA256Hex,
+        // Verify whenever a complete running hash exists — since WID-342
+        // that includes resumed transfers whose prefix was rehashed from a
+        // readable sink (the resumeOffset == 0 gate is obsolete).
+        if let expectedSHA = state.expectedSHA256Hex,
            let hasher = state.receivedHasher {
             let digest = hasher.finalize().hexLowercased
             guard digest == expectedSHA.lowercased() else {

@@ -3,6 +3,7 @@
 //  MirageControlMac
 //
 
+import Combine
 import Loom
 import LoomKit
 import SwiftUI
@@ -10,12 +11,13 @@ import SwiftUI
 struct MacMenuBarView: View {
     @Environment(\.loomContext) private var loomContext
     @EnvironmentObject private var authManager: DeviceAuthorizationManager
+    @EnvironmentObject private var daemon: MacDaemon
     @LoomQuery(.connections(sort: .connectedAtDescending)) private var connections: [LoomConnectionSnapshot]
     @LoomQuery(.peers(sort: .name)) private var peers: [LoomPeerSnapshot]
 
     let receiver: ControlReceiver
 
-    @State private var accessibilityGranted = InputInjector.shared.isAccessibilityGranted
+    @ObservedObject private var permissions = PermissionsMonitor.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -38,14 +40,36 @@ struct MacMenuBarView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("MirageControl")
                         .font(.system(size: 14, weight: .bold))
-                    Text(loomContext.isRunning ? "Ready to receive" : "Starting…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    // Failed-start state takes precedence: without it the
+                    // header sits on "Starting…" forever after a startup
+                    // error and the user has no signal anything is wrong
+                    // (WID-406).
+                    if daemon.fatalStartupError != nil {
+                        Label("Failed to start", systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(MirageTheme.danger)
+                            .labelStyle(.titleAndIcon)
+                    } else {
+                        Text(loomContext.isRunning ? "Ready to receive" : "Starting…")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+
+            // Concise, actionable detail row for the startup failure.
+            if let startupError = daemon.fatalStartupError {
+                Text(startupError)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(3)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
 
             Divider()
 
@@ -109,22 +133,70 @@ struct MacMenuBarView: View {
 
             Divider()
 
-            // ── Accessibility warning ─────────────────────────────────
-            if !accessibilityGranted {
-                Button {
-                    InputInjector.shared.requestAccessibility()
-                    withAnimation { accessibilityGranted = InputInjector.shared.isAccessibilityGranted }
-                } label: {
-                    Label("Grant Accessibility Access", systemImage: "exclamationmark.shield.fill")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            // ── Permissions ───────────────────────────────────────────
+            // Live status per TCC permission — re-checked every 2 s while
+            // the panel is open, so toggles flipped in System Settings
+            // reflect immediately. Each non-granted row is tappable and
+            // jumps to the exact Settings pane.
+            VStack(alignment: .leading, spacing: 2) {
+                Text("PERMISSIONS")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+
+                PermissionRow(
+                    title: "Accessibility",
+                    detail: "Mouse, keyboard, and dialog control",
+                    status: permissions.accessibility
+                ) { permissions.fixAccessibility() }
+
+                PermissionRow(
+                    title: "Screen Recording",
+                    detail: "Screenshots and live mirror",
+                    status: permissions.screenRecording
+                ) { permissions.fixScreenRecording() }
+
+                PermissionRow(
+                    title: "Notifications",
+                    detail: "Connection approval alerts",
+                    status: permissions.notifications
+                ) { permissions.fixNotifications() }
+
+                if permissions.screenRecordingNeedsRelaunch {
+                    Button {
+                        permissions.relaunchApp()
+                    } label: {
+                        Label("Settings says on, but capture is denied — remove & re-add in Settings, then tap to relaunch", systemImage: "arrow.clockwise.circle.fill")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-                Divider()
+
+                if permissions.accessibility == .denied || permissions.screenRecording == .denied {
+                    Text("Enabled it but still listed as off? Development builds change identity on every rebuild — remove MirageControl from the Settings list and add it back.")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+            .padding(.bottom, 6)
+            // Re-check on open and on a slow tick while visible — TCC has
+            // no change notifications, polling is the only way.
+            .onAppear { permissions.refresh() }
+            .onReceive(
+                Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+            ) { _ in
+                permissions.refresh()
+            }
+
+            Divider()
 
             // ── Footer ────────────────────────────────────────────────
             HStack {
@@ -150,6 +222,61 @@ struct MacMenuBarView: View {
             return DeviceType.iPhone.systemImage
         default:
             return peer.deviceType.systemImage
+        }
+    }
+}
+
+// MARK: - PermissionRow
+
+private struct PermissionRow: View {
+    let title: String
+    let detail: String
+    let status: PermissionsMonitor.Status
+    let onFix: () -> Void
+
+    var body: some View {
+        Button(action: { if status != .granted { onFix() } }) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13))
+                    .foregroundStyle(color)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Text(detail)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if status != .granted {
+                    Text("Fix…")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MirageTheme.violet)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(status == .granted ? "\(title): granted" : "Open System Settings to grant \(title)")
+    }
+
+    private var icon: String {
+        switch status {
+        case .granted: "checkmark.circle.fill"
+        case .denied: "exclamationmark.triangle.fill"
+        case .unknown: "questionmark.circle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch status {
+        case .granted: MirageTheme.success
+        case .denied: .orange
+        case .unknown: .secondary
         }
     }
 }
@@ -233,6 +360,7 @@ private struct PendingConnectionRow: View {
             Spacer()
 
             HStack(spacing: 6) {
+                // One decision, no modes: Allow (this session) or Deny.
                 Button {
                     authManager.authorize(connection: connection)
                 } label: {
@@ -241,7 +369,7 @@ private struct PendingConnectionRow: View {
                         .font(.system(size: 16))
                 }
                 .buttonStyle(.plain)
-                .help("Approve")
+                .help("Allow for this session")
 
                 Button {
                     authManager.reject(connection: connection, loomContext: loomContext)

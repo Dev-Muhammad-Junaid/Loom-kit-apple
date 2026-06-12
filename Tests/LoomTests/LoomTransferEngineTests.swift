@@ -149,6 +149,117 @@ struct LoomTransferEngineTests {
     }
 
     @MainActor
+    @Test("Resumed transfers verify end-to-end integrity via prefix rehash")
+    func resumedTransferVerifiesIntegrity() async throws {
+        try await LoomGlobalSinkTestLock.shared.runOnMainActor(reset: {
+            await LoomInstrumentation.resetForTesting()
+            await LoomDiagnostics.resetForTesting()
+        }) {
+            let sinkRecorder = TransferEventSink()
+            _ = await LoomInstrumentation.addSink(sinkRecorder)
+            _ = await LoomDiagnostics.addSink(sinkRecorder)
+            let pair = try await makeTransferPair()
+            defer {
+                Task {
+                    await pair.stop()
+                }
+            }
+            try await pair.startSessions()
+
+            let sender = LoomTransferEngine(session: pair.client)
+            let receiver = LoomTransferEngine(session: pair.server)
+            let sourceData = Data("0123456789abcdefghij".utf8)
+            let resumeOffset = UInt64(10)
+            let source = MemoryTransferSource(data: sourceData)
+            // sha256Hex present → the engine must rehash the resumed
+            // prefix (WID-342) and the digest must match at completion.
+            let offer = LoomTransferOffer(
+                logicalName: "resume-verified.txt",
+                byteLength: UInt64(sourceData.count),
+                sha256Hex: sourceData.sha256Hex
+            )
+
+            let incomingTask = Task<LoomIncomingTransfer?, Never> {
+                for await incoming in receiver.incomingTransfers {
+                    return incoming
+                }
+                return nil
+            }
+
+            let outgoing = try await sender.offerTransfer(offer, source: source)
+            let incoming = try #require(await incomingTask.value)
+            let sink = MemoryTransferSink(initialData: Data(sourceData.prefix(Int(resumeOffset))))
+            try await incoming.accept(using: sink, resumeOffset: resumeOffset)
+
+            let outgoingTerminal = await terminalProgress(from: outgoing.progressEvents)
+            let incomingTerminal = await terminalProgress(from: incoming.progressEvents)
+
+            #expect(outgoingTerminal?.state == .completed)
+            #expect(incomingTerminal?.state == .completed)
+            #expect(await sink.data == sourceData)
+            #expect(await waitUntil {
+                let steps = await sinkRecorder.stepNames()
+                return steps.contains("loom.transfer.resume_rehash")
+            })
+        }
+    }
+
+    @MainActor
+    @Test("Corrupted resume prefix fails integrity verification")
+    func corruptedResumePrefixFailsIntegrity() async throws {
+        try await LoomGlobalSinkTestLock.shared.runOnMainActor(reset: {
+            await LoomInstrumentation.resetForTesting()
+            await LoomDiagnostics.resetForTesting()
+        }) {
+            let sinkRecorder = TransferEventSink()
+            _ = await LoomInstrumentation.addSink(sinkRecorder)
+            _ = await LoomDiagnostics.addSink(sinkRecorder)
+            let pair = try await makeTransferPair()
+            defer {
+                Task {
+                    await pair.stop()
+                }
+            }
+            try await pair.startSessions()
+
+            let sender = LoomTransferEngine(session: pair.client)
+            let receiver = LoomTransferEngine(session: pair.server)
+            let sourceData = Data("0123456789abcdefghij".utf8)
+            let resumeOffset = UInt64(10)
+            let source = MemoryTransferSource(data: sourceData)
+            let offer = LoomTransferOffer(
+                logicalName: "resume-corrupt.txt",
+                byteLength: UInt64(sourceData.count),
+                sha256Hex: sourceData.sha256Hex
+            )
+
+            let incomingTask = Task<LoomIncomingTransfer?, Never> {
+                for await incoming in receiver.incomingTransfers {
+                    return incoming
+                }
+                return nil
+            }
+
+            _ = try await sender.offerTransfer(offer, source: source)
+            let incoming = try #require(await incomingTask.value)
+            // Locally held prefix doesn't match what the sender originally
+            // shipped — pre-WID-342 this completed "successfully" with a
+            // silently corrupt file.
+            let corruptPrefix = Data(repeating: 0xAB, count: Int(resumeOffset))
+            let sink = MemoryTransferSink(initialData: corruptPrefix)
+            try await incoming.accept(using: sink, resumeOffset: resumeOffset)
+
+            let incomingTerminal = await terminalProgress(from: incoming.progressEvents)
+            #expect(incomingTerminal?.state == .failed)
+            #expect(await waitUntil {
+                let steps = await sinkRecorder.stepNames()
+                return steps.contains("loom.transfer.resume_rehash") &&
+                    steps.contains("loom.transfer.integrity_mismatch")
+            })
+        }
+    }
+
+    @MainActor
     @Test("Integrity mismatches fail the incoming transfer")
     func integrityMismatchFailsIncomingTransfer() async throws {
         try await LoomGlobalSinkTestLock.shared.runOnMainActor(reset: {
@@ -452,11 +563,18 @@ private struct DelayedTransferSource: LoomTransferSource {
     }
 }
 
-private actor MemoryTransferSink: LoomTransferSink {
+private actor MemoryTransferSink: LoomTransferSink, LoomReadableTransferSink {
     private(set) var data: Data
 
     init(initialData: Data = Data()) {
         data = initialData
+    }
+
+    func readWritten(offset: UInt64, maxLength: Int) async throws -> Data {
+        let lower = Int(offset)
+        guard lower < data.count else { return Data() }
+        let upper = min(lower + maxLength, data.count)
+        return data.subdata(in: lower..<upper)
     }
 
     func truncate(to byteCount: UInt64) async throws {

@@ -121,9 +121,20 @@ public final class LoomDiscovery {
         switch state {
         case .ready:
             isSearching = true
-        case .cancelled,
-             .failed:
+        case .cancelled:
             isSearching = false
+        case let .failed(error):
+            isSearching = false
+            // Authorization denials (-65555) are the classic "works in
+            // debug, dead in production" failure. Attach actionable
+            // guidance to the log instead of the bare NWError (WID-333).
+            if let guidance = LoomLocalNetworkDiagnostics.guidance(
+                for: error, serviceType: serviceType
+            ) {
+                LoomLogger.error(.discovery, "Discovery failed: \(guidance)")
+            } else {
+                LoomLogger.error(.discovery, "Discovery failed: \(error)")
+            }
         default:
             break
         }

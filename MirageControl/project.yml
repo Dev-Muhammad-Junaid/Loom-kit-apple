@@ -71,6 +71,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.miragecontrol.ios
         INFOPLIST_FILE: MirageControliOS/Info.plist
+        CODE_SIGN_ENTITLEMENTS: MirageControliOS/MirageControliOS.entitlements
         PRODUCT_NAME: MirageControl
         TARGETED_DEVICE_FAMILY: "1,2"  # iPhone + iPad
         IPHONEOS_DEPLOYMENT_TARGET: "17.4"
@@ -78,4 +79,27 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        SWIFT_VERSION: 6.0
+
+  # ─────────────────────────────────────────────────────────────
+  # Wire-format contract tests (WID-400)
+  # Compiles Shared/ directly so the tests exercise the exact
+  # sources both apps ship, without needing a host app.
+  # ─────────────────────────────────────────────────────────────
+  MirageControlTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: MirageControlTests
+        type: group
+      - path: Shared
+        type: group
+    dependencies:
+      - package: Loom
+        product: LoomKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miragecontrol.tests
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: 6.0

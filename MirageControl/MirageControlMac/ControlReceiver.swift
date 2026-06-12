@@ -13,39 +13,131 @@ import LoomKit
 final class ControlReceiver {
     private let injector = InputInjector.shared
     private let launcher = AppLauncher.shared
+    /// Consume tasks keyed by `handle.id` so authorization revocation and
+    /// liveness timeouts can cancel consumption *immediately* — buffered
+    /// commands from a dead/revoked iPad are dropped, never replayed.
     private var connectionTasks: [UUID: Task<Void, Never>] = [:]
+    private var connectionHandles: [UUID: LoomConnectionHandle] = [:]
+    /// Last time any message arrived per connection, and whether the peer
+    /// has ever pinged (heartbeat-capable builds only get the timeout).
+    private var lastActivityAt: [UUID: Date] = [:]
+    private var hasPinged: Set<UUID> = []
+    private var livenessSweepTask: Task<Void, Never>?
+    #if DEBUG
+    /// Sampled counter for high-rate input logging (see consumeMessages).
+    private var inputMessageCount = 0
+    #endif
+
+    /// Connections silent for longer than this (after having pinged at
+    /// least once — i.e. provably heartbeat-capable) are declared dead.
+    /// The iPad pings every 2 s, so 8 s = four missed beats.
+    private static let livenessTimeout: TimeInterval = 8
 
     /// Called from MacMenuBarView for each newly established incoming connection.
     func observeConnection(_ connectionHandle: LoomConnectionHandle) {
-        // Use a locally generated key — we can't synchronously read actor-isolated .id
-        let taskKey = UUID()
-        connectionTasks[taskKey] = Task { [weak self] in
-            await ActiveAppMonitor.shared.addConnection(connectionHandle, id: taskKey)
-            await RunningAppMonitor.shared.addConnection(connectionHandle, id: taskKey)
-            await ContextObserver.shared.addConnection(connectionHandle, id: taskKey)
+        let key = connectionHandle.id
+        connectionHandles[key] = connectionHandle
+        lastActivityAt[key] = Date()
+        startLivenessSweepIfNeeded()
+        connectionTasks[key] = Task { [weak self] in
+            await ActiveAppMonitor.shared.addConnection(connectionHandle, id: key)
+            await RunningAppMonitor.shared.addConnection(connectionHandle, id: key)
+            await ContextObserver.shared.addConnection(connectionHandle, id: key)
+            // Tell the remote up front what this host can actually do, so
+            // it can explain missing permissions instead of failing silently.
+            await self?.sendCapabilities(to: connectionHandle)
             await self?.consumeMessages(from: connectionHandle)
+            // The message loop has ended (stream finished, task cancelled
+            // by revocation, or liveness timeout). Stop any mirror stream
+            // so capture doesn't burn CPU/GPU against a dead handle.
+            await MirrorStreamService.shared.stop(subscriberID: key)
             _ = await MainActor.run { [weak self] in
-                self?.connectionTasks.removeValue(forKey: taskKey)
-                ActiveAppMonitor.shared.removeConnection(id: taskKey)
-                RunningAppMonitor.shared.removeConnection(id: taskKey)
-                ContextObserver.shared.removeConnection(id: taskKey)
+                self?.cleanupConnection(key)
             }
+        }
+    }
+
+    /// Immediately stops consuming a connection's messages. Called on
+    /// authorization revocation and liveness timeout: any commands the
+    /// iPad queued before dying are discarded instead of executed.
+    func cancelConsumption(connectionID: UUID) {
+        guard let task = connectionTasks[connectionID] else { return }
+        #if DEBUG
+        print("MirageControl: 🛑 cancelling consumption for \(connectionID) (revoked or liveness timeout)")
+        #endif
+        task.cancel()
+    }
+
+    private func cleanupConnection(_ key: UUID) {
+        connectionTasks.removeValue(forKey: key)
+        connectionHandles.removeValue(forKey: key)
+        lastActivityAt.removeValue(forKey: key)
+        hasPinged.remove(key)
+        ActiveAppMonitor.shared.removeConnection(id: key)
+        RunningAppMonitor.shared.removeConnection(id: key)
+        ContextObserver.shared.removeConnection(id: key)
+    }
+
+    /// Periodic check: any heartbeat-capable connection that has gone
+    /// silent past the timeout is dead — cancel its consumption and
+    /// disconnect the handle so the menu bar stops showing a zombie row.
+    private func startLivenessSweepIfNeeded() {
+        guard livenessSweepTask == nil else { return }
+        livenessSweepTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                await self?.sweepDeadConnections()
+            }
+        }
+    }
+
+    private func sweepDeadConnections() async {
+        let now = Date()
+        for (key, lastSeen) in lastActivityAt
+        where hasPinged.contains(key) && now.timeIntervalSince(lastSeen) > Self.livenessTimeout {
+            MirageLog.connection.info("Liveness timeout for connection \(key, privacy: .public) — dropping")
+            cancelConsumption(connectionID: key)
+            if let handle = connectionHandles[key] {
+                Task { await handle.disconnect() }
+            }
+            cleanupConnection(key)
         }
     }
 
     private func consumeMessages(from connectionHandle: LoomConnectionHandle) async {
         for await data in connectionHandle.messages {
+            // Honors cancelConsumption: stop dispatching the moment the
+            // connection is revoked or timed out, even with a backlog.
+            if Task.isCancelled { return }
+            lastActivityAt[connectionHandle.id] = Date()
             let message: ControlMessage
             do {
-                message = try JSONDecoder().decode(ControlMessage.self, from: data)
+                message = try ControlMessageCoding.decoder.decode(ControlMessage.self, from: data)
             } catch {
                 #if DEBUG
                 print("MirageControl: ⚠️ Failed to decode ControlMessage (\(data.count)B): \(error)")
                 #endif
                 continue
             }
+            #if DEBUG
+            // Arrival visibility: when the iPad "does nothing", the first
+            // question is whether its messages reach this loop at all.
+            // High-rate input is sampled so the console stays readable.
+            switch message {
+            case .mouseDelta, .mouseScroll:
+                inputMessageCount += 1
+                if inputMessageCount % 120 == 1 {
+                    print("MirageControl: 📥 input stream alive (\(inputMessageCount) input messages so far)")
+                }
+            default:
+                print("MirageControl: 📥 dispatching \(message)")
+            }
+            #endif
             await dispatch(message, handle: connectionHandle)
         }
+        #if DEBUG
+        print("MirageControl: 📪 message loop ended for a connection (peer disconnected or session replaced)")
+        #endif
     }
 
     private func dispatch(_ message: ControlMessage, handle: LoomConnectionHandle) async {
@@ -65,20 +157,30 @@ final class ControlReceiver {
         case let .keyboardShortcut(keys):
             injector.sendShortcut(keys: keys)
 
+        // ── Slow / potentially-blocking operations ───────────────────
+        // CRITICAL: these run in their OWN tasks. The message loop awaits
+        // dispatch serially, and several of these can stall for seconds —
+        // ScreenCaptureKit calls are documented to hang outright when the
+        // TCC grant is wedged. One hung handler used to freeze the entire
+        // loop: input went dead, pongs stopped (so liveness killed the
+        // connection), and the queued backlog of commands fired all at
+        // once when the connection finally tore down.
+
         case let .launchApp(bundleID):
-            await launcher.launch(bundleID: bundleID)
+            Task { await self.launcher.launch(bundleID: bundleID) }
 
         case let .appShortcut(bundleID, keys):
-            // Activate the target app, wait for it to become frontmost, then
-            // inject. The wait is short (≤600 ms) but prevents the shortcut
-            // from landing in whichever app happened to be focused when the
-            // user tapped.
-            await launcher.activateAndWait(bundleID: bundleID)
-            injector.sendShortcut(keys: keys)
+            // Activate the target app, wait for it to become frontmost
+            // (≤600 ms), then inject — self-contained ordering inside its
+            // own task.
+            Task {
+                await self.launcher.activateAndWait(bundleID: bundleID)
+                self.injector.sendShortcut(keys: keys)
+            }
 
         case let .macroButton(id):
-            await dispatchMacro(id: id)
-            
+            Task { await self.dispatchMacro(id: id) }
+
         case let .mediaCommand(action):
             switch action {
             case "playpause": injector.sendMediaKey(NX_KEYTYPE_PLAY)
@@ -88,23 +190,67 @@ final class ControlReceiver {
             }
             
         case let .requestScreenshot(requestID, mode):
-            await handleScreenshotRequest(requestID: requestID, mode: mode, handle: handle)
+            Task { await self.handleScreenshotRequest(requestID: requestID, mode: mode, handle: handle) }
 
         case let .requestWindowList(requestID):
-            await handleWindowListRequest(requestID: requestID, handle: handle)
+            Task { await self.handleWindowListRequest(requestID: requestID, handle: handle) }
 
         case .requestAppList:
-            await handleAppListRequest(handle: handle)
+            Task { await self.handleAppListRequest(handle: handle) }
 
         case let .requestAppMenuShortcuts(bundleID):
-            await handleMenuShortcutsRequest(bundleID: bundleID, handle: handle)
+            Task { await self.handleMenuShortcutsRequest(bundleID: bundleID, handle: handle) }
 
         case let .triggerContextAction(id):
-            ContextObserver.shared.performAction(id: id)
+            // AXUIElementPerformAction can block up to the AX messaging
+            // timeout (~6 s) on an unresponsive app — own task.
+            Task { ContextObserver.shared.performAction(id: id) }
+
+        case let .startMirror(fps, maxWidth):
+            // SCShareableContent inside — the #1 hang candidate. Own task.
+            let subscriberID = handle.id
+            Task {
+                await MirrorStreamService.shared.start(
+                    subscriberID: subscriberID,
+                    handle: handle,
+                    fps: fps,
+                    maxWidth: maxWidth
+                )
+            }
+
+        case .stopMirror:
+            let subscriberID = handle.id
+            Task { await MirrorStreamService.shared.stop(subscriberID: subscriberID) }
+
+        case let .ping(seq):
+            hasPinged.insert(handle.id)
+            try? await handle.send(.pong(seq: seq))
+            // Re-report capabilities every 5th ping (~10 s): if the user
+            // grants/revokes a TCC permission mid-session the remote's
+            // warning banner updates without reconnecting.
+            if seq % 5 == 0 {
+                await sendCapabilities(to: handle)
+            }
+
+        case .pong:
+            break // host never receives pongs
+
+        case .requestAuthorizationStatus:
+            // Resync path: messages are only consumed for *authorized*
+            // connections (DeviceAuthorizationManager gates the handoff),
+            // so reaching this dispatch means the answer is "granted".
+            // Queries sent while the request was pending sit buffered in
+            // the handle and get answered here right after approval —
+            // healing any lost/failed `granted` push.
+            do {
+                try await handle.send(.authorizationStatus(status: "granted"))
+            } catch {
+                MirageLog.connection.error("Failed to answer auth-status query: \(error.localizedDescription, privacy: .public)")
+            }
 
         case .authorizationStatus:
             break
-        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse, .runningAppsUpdate, .uiContextUpdate, .windowListResponse:
+        case .screenshotData, .screenshotError, .activeAppUpdate, .appListResponse, .appMenuShortcutsResponse, .runningAppsUpdate, .uiContextUpdate, .windowListResponse, .mirrorFrame, .hostCapabilities:
             // Client-bound messages; host doesn't process them locally
             break
         }
@@ -183,6 +329,17 @@ final class ControlReceiver {
                 message: "Couldn't read window list: \(error.localizedDescription)"
             )
         }
+    }
+
+    /// Reports what this host can actually execute. Accessibility is read
+    /// live (cheap); screen recording uses the preflight toggle — the
+    /// PermissionsMonitor probe is authoritative for local UI, but for the
+    /// remote's banner the toggle is a good-enough, allocation-free check.
+    private func sendCapabilities(to handle: LoomConnectionHandle) async {
+        try? await handle.send(.hostCapabilities(
+            accessibility: injector.isAccessibilityGranted,
+            screenRecording: CGPreflightScreenCaptureAccess()
+        ))
     }
 
     private func sendError(requestID: String, to handle: LoomConnectionHandle, message: String) async {

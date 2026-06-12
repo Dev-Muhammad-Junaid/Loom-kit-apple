@@ -308,7 +308,9 @@ final class ContextObserver {
         let msg = ControlMessage.uiContextUpdate(snapshot: snapshot)
         let data: Data
         do {
-            data = try JSONEncoder().encode(msg)
+            // Encode once, broadcast the same payload to every peer; reuse
+            // the shared encoder rather than allocating one per snapshot.
+            data = try ControlMessageCoding.encoder.encode(msg)
         } catch {
             #if DEBUG
             print("MirageControl: ContextObserver ❌ failed to encode snapshot: \(error)")

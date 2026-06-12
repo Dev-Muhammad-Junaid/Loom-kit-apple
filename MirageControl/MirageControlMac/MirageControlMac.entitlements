@@ -8,15 +8,15 @@
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 
-	<!-- Convenience for hardened-runtime debugging. Inert at runtime. -->
-	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
-	<true/>
-
-	<!-- Reserved for a future "FaceTime mute / system input level" feature
-	     that we want the iPad to drive. Not exercised today; leaving on so
-	     adding the feature doesn't require re-signing. -->
-	<key>com.apple.security.device.audio-input</key>
-	<true/>
+	<!-- WID-392: least-privilege audit.
+	     Removed `com.apple.security.cs.allow-dyld-environment-variables` —
+	     it weakens the hardened runtime in shipping builds and is only a
+	     local-debugging convenience (re-enable in a Debug-only .entitlements
+	     if ever needed).
+	     Removed `com.apple.security.device.audio-input` — it was reserved
+	     for an unbuilt "system input level" feature; microphone access is a
+	     high-risk scope to hold speculatively and re-adding it alongside the
+	     actual feature is a one-line change. -->
 
 	<!-- Loom transport: Bonjour discovery + Network.framework sessions. -->
 	<key>com.apple.security.network.client</key>
@@ -35,5 +35,20 @@
 	<array>
 		<string>$(AppIdentifierPrefix)com.miragecontrol.mac</string>
 	</array>
+
+	<!-- Same-iCloud device awareness (disabled — requires a paid developer
+	     account). Uncomment together with MirageCloud.isCloudEnabled once
+	     the container is registered in the developer portal.
+
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.miragecontrol.shared</string>
+	</array>
+	-->
+
 </dict>
 </plist>

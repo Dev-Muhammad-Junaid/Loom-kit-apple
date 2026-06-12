@@ -14,18 +14,15 @@ import Combine
 final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     static let shared = DeviceAuthorizationManager()
 
-    @AppStorage("authorizedDeviceIDs") private var authorizedDeviceIDsData: Data = Data()
-    
-    @Published var authorizedDeviceIDs: Set<LoomPeerID> = [] {
-        didSet {
-            if let data = try? JSONEncoder().encode(authorizedDeviceIDs) {
-                authorizedDeviceIDsData = data
-            }
-        }
-    }
+    /// Devices the user has approved THIS app session. Deliberately not
+    /// persisted: every fresh host launch prompts again. Manual accept /
+    /// deny with no other checks — auto-grant from persisted state caused
+    /// connections to be silently authorized against stale assumptions
+    /// after reconnects, which made failures impossible to reason about.
+    @Published var authorizedDeviceIDs: Set<LoomPeerID> = []
     
     @Published var pendingConnections: [LoomConnectionSnapshot] = []
-    
+
     // Retain handles so we can route them after approval
     private var pendingHandles: [UUID: LoomConnectionHandle] = [:]
     private var pendingRequestedAt: [UUID: Date] = [:]
@@ -33,13 +30,16 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
 
     // Callback so MacMenuBarView can pass authorized handles to the receiver
     var onDeviceAuthorized: ((LoomConnectionHandle) -> Void)?
+    /// Fired when the user revokes a connection so the receiver stops
+    /// consuming its messages immediately — buffered commands from the
+    /// revoked device are dropped, not executed.
+    var onConnectionRevoked: ((UUID) -> Void)?
     private static let pendingRequestTimeout: Duration = .seconds(45)
 
     override init() {
         super.init()
-        if let decoded = try? JSONDecoder().decode(Set<LoomPeerID>.self, from: authorizedDeviceIDsData) {
-            authorizedDeviceIDs = decoded
-        }
+        // Nothing restored from disk — approval state starts empty every
+        // launch, by design.
     }
     
     func requestNotificationPermissions() {
@@ -60,13 +60,24 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
     }
 
     func isAuthorized(peerID: LoomPeerID) -> Bool {
-        return authorizedDeviceIDs.contains(peerID)
+        authorizedDeviceIDs.contains(peerID)
     }
 
     func handleIncomingConnection(_ connection: LoomConnectionSnapshot, handle: LoomConnectionHandle) {
+        // SIMPLE BY DESIGN: every incoming connection goes through an
+        // explicit Accept / Deny. No persisted auto-grant, no same-iCloud
+        // fast path, no other checks — the user decides, every time.
+        // (`authorizedDeviceIDs` only short-circuits REPEAT connections
+        // within the same already-approved session.)
         if isAuthorized(peerID: connection.peerID) {
             Task {
-                try? await handle.send(.authorizationStatus(status: "granted"))
+                do {
+                    try await handle.send(.authorizationStatus(status: "granted"))
+                } catch {
+                    // Recoverable: the iPad polls requestAuthorizationStatus
+                    // and ControlReceiver answers it.
+                    MirageLog.trust.error("Failed to push granted status: \(error.localizedDescription, privacy: .public)")
+                }
             }
             onDeviceAuthorized?(handle)
             return
@@ -96,6 +107,7 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
         }
     }
     
+    /// Grants access for this app session. Manual, every launch.
     func authorize(connection: LoomConnectionSnapshot) {
         authorizedDeviceIDs.insert(connection.peerID)
         let peerPending = pendingConnections
@@ -115,12 +127,30 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
             }
         }
 
+        #if DEBUG
+        print("MirageControl: 🔑 authorize() granting peer \(connection.peerName) on connection \(target.id); \(pendingConnections.count) other pending, \(peerPending.count) for this peer")
+        #endif
         removePendingConnection(id: target.id)
         if let handle = pendingHandles.removeValue(forKey: target.id) {
             Task {
-                try? await handle.send(.authorizationStatus(status: "granted"))
+                // The push is best-effort, but a silent failure here used to
+                // strand the iPad on the approval overlay while the host
+                // believed the session was live. Log it — and note the iPad
+                // also polls `requestAuthorizationStatus`, which is answered
+                // from the (now-consuming) ControlReceiver loop, so a lost
+                // push self-heals within one poll interval.
+                do {
+                    try await handle.send(.authorizationStatus(status: "granted"))
+                } catch {
+                    MirageLog.trust.error("Failed to push granted status: \(error.localizedDescription, privacy: .public)")
+                }
                 onDeviceAuthorized?(handle)
             }
+        } else {
+            // Approval raced the 45 s expiry (or a dismissal): trust was
+            // recorded but there's no live handle to notify. The iPad's
+            // next connection attempt will be auto-granted.
+            MirageLog.trust.info("Authorized \(connection.peerName, privacy: .public) but no pending handle remained (expired/dismissed)")
         }
     }
     
@@ -136,6 +166,10 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
     }
     
     func removeAndDisconnect(connection: LoomConnectionSnapshot, loomContext: LoomContext) {
+        // Stop dispatching this device's commands BEFORE tearing down the
+        // transport — otherwise buffered input keeps executing during the
+        // (async) disconnect.
+        onConnectionRevoked?(connection.id)
         authorizedDeviceIDs.remove(connection.peerID)
         removePendingConnection(id: connection.id)
         Task {
@@ -238,8 +272,15 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
                     if actionIdentifier == "ACCEPT_ACTION" {
                         self.authorize(connection: pending)
                     } else if actionIdentifier == "REJECT_ACTION" {
-                        self.removePendingConnection(id: connectionID)
-                        if let handle = self.pendingHandles.removeValue(forKey: connectionID) {
+                        // Use `pending.id`, not the notification's original
+                        // `connectionID` — when the notification was stale
+                        // (peer reconnected, request replaced) the fallback
+                        // above resolved a *different* pending entry. Keying
+                        // the removal off the stale ID silently no-op'd the
+                        // denial and left the iPad waiting out the 45 s
+                        // expiry.
+                        self.removePendingConnection(id: pending.id)
+                        if let handle = self.pendingHandles.removeValue(forKey: pending.id) {
                             Task {
                                 try? await handle.send(.authorizationStatus(status: "denied"))
                                 try? await Task.sleep(nanoseconds: 100_000_000)
