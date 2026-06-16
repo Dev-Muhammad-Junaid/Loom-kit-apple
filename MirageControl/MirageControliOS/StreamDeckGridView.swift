@@ -402,12 +402,20 @@ private struct SearchField: View {
     @ViewBuilder
     private var background: some View {
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        // `#if compiler(>=6.2)` (Xcode 26+) is load-bearing, not just the
+        // runtime `#available`: `glassEffect` is an iOS 26 SDK symbol, so
+        // the older SDK (Xcode 16/Swift 6.1) can't even compile the branch.
+        // Building on Xcode 16 falls through to the plain material.
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             shape.fill(.regularMaterial)
                 .glassEffect(in: shape)
         } else {
             shape.fill(.regularMaterial)
         }
+        #else
+        shape.fill(.regularMaterial)
+        #endif
     }
 }
 

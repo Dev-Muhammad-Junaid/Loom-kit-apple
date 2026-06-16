@@ -5,6 +5,7 @@
 
 import Foundation
 import LoomKit
+import os
 import QuartzCore
 
 /// Actor that owns the active connection handle and throttles outgoing control messages.
@@ -38,6 +39,15 @@ actor TrackpadSender {
     /// receives a single `.begin` followed by `.changed` ticks. The next
     /// `.changed` flips this back to false on `endScroll(...)`.
     private var inScrollGesture: Bool = false
+
+    // ── Diagnostics ─────────────────────────────────────────────────
+    // The send path used to swallow every error (`try?`) and log nothing,
+    // so "the iPad isn't sending" and "the send failed on the wire" looked
+    // identical to "no finger movement." These prove the iPad is actually
+    // transmitting and surface transport failures, throttled so the 120 Hz
+    // path doesn't flood Console.
+    private var mouseSendCount: UInt64 = 0
+    private var lastSendErrorLogAt: Double = 0
 
     init(handle: LoomConnectionHandle) {
         self.handle = handle
@@ -74,6 +84,10 @@ actor TrackpadSender {
         pendingDeltaY = 0
         lastMouseSentAt = CACurrentMediaTime()
 
+        mouseSendCount &+= 1
+        if mouseSendCount % 120 == 1 {
+            MirageLog.input.info("📤 iPad mouseDelta stream alive (\(self.mouseSendCount) sent)")
+        }
         await send(.mouseDelta(dx: dx, dy: dy))
     }
 
@@ -251,6 +265,17 @@ actor TrackpadSender {
     // MARK: - Core send
 
     private func send(_ message: ControlMessage) async {
-        try? await handle.send(message)
+        do {
+            try await handle.send(message)
+        } catch {
+            // Throttled: a dead connection would otherwise log every 120 Hz
+            // mouseDelta. The heartbeat in ControlView tears the session down
+            // shortly after, so one error/sec is enough to see the cause.
+            let now = CACurrentMediaTime()
+            if now - lastSendErrorLogAt > 1 {
+                lastSendErrorLogAt = now
+                MirageLog.connection.error("📤 iPad send failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 }

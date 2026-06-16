@@ -124,6 +124,18 @@ public actor LoomConnectionHandle {
         healthContinuation.finish()
     }
 
+    /// Whether the underlying authenticated session is still in its `.ready`
+    /// state.
+    ///
+    /// LoomKit uses this as the liveness signal when a new incoming session
+    /// arrives for a peer that already has a connection: if the existing
+    /// session is still ready the new one is a duplicate (transport race or a
+    /// redundant redial) and is dropped; otherwise the old session is dead and
+    /// the new one replaces it.
+    var isSessionLive: Bool {
+        get async { await session.state == .ready }
+    }
+
     func startObservers() {
         guard stateObservationTask == nil,
               streamObservationTask == nil,
@@ -283,24 +295,42 @@ public actor LoomConnectionHandle {
 
     private func observeIncomingStreams() async {
         let streamObserver = session.makeIncomingStreamObserver()
-        for await stream in streamObserver {
-            guard stream.label == Self.defaultMessageStreamLabel else {
-                lastActivityAt = .now
-                continue
-            }
-            for await payload in stream.incomingBytes {
-                lastActivityAt = .now
-                if let rateLimiter, !rateLimiter.tryConsume() {
-                    LoomLogger.debug(
-                        .transport,
-                        "LoomKit rate limiter dropped message (\(payload.count) bytes) on connection \(id)"
-                    )
+        // Drain each default-message stream in its OWN child task. A peer can
+        // open more than one message stream over a session's life (e.g. it
+        // reopens after a transient send error). The previous single inner
+        // `for await` blocked on the first stream until it closed, so a second
+        // stream's payloads buffered unread until disconnect — surfacing as
+        // commands that only fired in a burst on teardown. Concurrent
+        // draining services every stream as soon as it arrives.
+        await withTaskGroup(of: Void.self) { group in
+            for await stream in streamObserver {
+                guard stream.label == Self.defaultMessageStreamLabel else {
+                    lastActivityAt = .now
                     continue
                 }
-                messagesContinuation.yield(payload)
-                eventsContinuation.yield(.message(payload))
+                group.addTask { [weak self] in
+                    for await payload in stream.incomingBytes {
+                        await self?.deliverIncomingMessage(payload)
+                    }
+                }
             }
         }
+    }
+
+    /// Rate-limits and publishes one inbound default-message payload. Invoked
+    /// from per-stream child tasks, so it must be actor-isolated to keep the
+    /// rate limiter and stream yields consistent across concurrent streams.
+    private func deliverIncomingMessage(_ payload: Data) {
+        lastActivityAt = .now
+        if let rateLimiter, !rateLimiter.tryConsume() {
+            LoomLogger.debug(
+                .transport,
+                "LoomKit rate limiter dropped message (\(payload.count) bytes) on connection \(id)"
+            )
+            return
+        }
+        messagesContinuation.yield(payload)
+        eventsContinuation.yield(.message(payload))
     }
 
     private func observeNetworkPath() async {

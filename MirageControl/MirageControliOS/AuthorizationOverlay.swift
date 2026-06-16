@@ -45,6 +45,10 @@ struct AuthorizationOverlay: View {
     private var disconnectButton: some View {
         let label = isTerminalState ? "Dismiss" : "Disconnect"
         let role: ButtonRole? = isTerminalState ? .cancel : .destructive
+        // Compile-time guard, not just runtime: `.glass` only exists in the
+        // iOS 26 SDK (Xcode 26 / Swift 6.2). On Xcode 16 the whole branch
+        // would fail to compile, so gate it out and use `.bordered`.
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             Button(label, role: role, action: onDisconnect)
                 .buttonStyle(.glass)
@@ -54,6 +58,11 @@ struct AuthorizationOverlay: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
         }
+        #else
+        Button(label, role: role, action: onDisconnect)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+        #endif
     }
 
     // MARK: - Native dialog card (Liquid Glass on iOS 26, material on iOS 17)
@@ -61,6 +70,7 @@ struct AuthorizationOverlay: View {
     @ViewBuilder
     private var cardBackground: some View {
         let shape = RoundedRectangle(cornerRadius: MirageTheme.Radius.xxl, style: .continuous)
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             shape
                 .fill(.regularMaterial)
@@ -70,6 +80,11 @@ struct AuthorizationOverlay: View {
                 .fill(.regularMaterial)
                 .shadow(color: MirageTheme.dialogCardShadow(colorScheme), radius: 24, y: 12)
         }
+        #else
+        shape
+            .fill(.regularMaterial)
+            .shadow(color: MirageTheme.dialogCardShadow(colorScheme), radius: 24, y: 12)
+        #endif
     }
 
     @ViewBuilder

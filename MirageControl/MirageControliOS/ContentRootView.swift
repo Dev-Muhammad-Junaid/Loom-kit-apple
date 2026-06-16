@@ -24,6 +24,7 @@ struct ContentRootView: View {
                             }
                         },
                         onDisconnect: {
+                            MirageLog.connection.info("iPad disconnect (user/overlay) for \(connection.peerName, privacy: .public) conn=\(connection.handle.id, privacy: .public)")
                             Task { await connection.handle.disconnect() }
                             activeConnection = nil
                             authStatus = "pending"
@@ -52,7 +53,8 @@ struct ContentRootView: View {
                     // All message-level handling is consolidated in ControlView
                     // to avoid competing async consumers on the same stream.
                     for await event in connection.handle.events {
-                        if case .disconnected = event {
+                        if case let .disconnected(reason) = event {
+                            MirageLog.connection.info("iPad handle disconnected for \(connection.peerName, privacy: .public) conn=\(connection.handle.id, privacy: .public) reason=\(reason ?? "nil", privacy: .public) — leaving ControlView")
                             await MainActor.run {
                                 if authStatus != "denied" {
                                     withAnimation(.easeInOut(duration: 0.22)) {

@@ -15,6 +15,14 @@ public protocol LoomSessionProtocol: Sendable {
     /// Negotiated peer/session context once the handshake has completed.
     var context: LoomAuthenticatedSessionContext? { get async }
 
+    /// Current lifecycle state of the session.
+    ///
+    /// Exposes a point-in-time liveness signal so higher layers (e.g. the
+    /// LoomKit incoming-connection dedup) can decide synchronously whether an
+    /// existing connection is still working without subscribing to the state
+    /// observer stream.
+    var state: LoomAuthenticatedSessionState { get async }
+
     /// Creates an additional observation stream for inbound logical streams.
     func makeIncomingStreamObserver() -> AsyncStream<LoomMultiplexedStream>
 

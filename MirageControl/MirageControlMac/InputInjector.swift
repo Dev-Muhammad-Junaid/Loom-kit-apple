@@ -7,6 +7,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import os
 
 // These constants are defined in IOKit/hidsystem/ev_keymap.h but aren't
 // globally visible without importing IOKit.hid.
@@ -21,6 +22,37 @@ final class InputInjector {
     static let shared = InputInjector()
 
     private init() {}
+
+    // MARK: - Diagnostics
+    //
+    // Every injection method below returns silently when Accessibility
+    // isn't granted, which made "the Mac received the message but the
+    // cursor never moved" indistinguishable from "the message never
+    // arrived" (hypothesis 3). These throttled logs make that distinction
+    // visible in Console.app / `log stream` without flooding at 120 Hz.
+    private var lastSkipLogAt: Date = .distantPast
+    private var hasLoggedFirstInjection = false
+    /// Timestamp of the previous `moveCursor` injection, used to detect
+    /// dropped frames during active movement (cursor-jitter investigation).
+    private var lastMoveCursorAt: Date?
+
+    /// Logs (≤1/sec) that an inbound input event was dropped because
+    /// Accessibility isn't granted — the smoking gun for "received but
+    /// not injected."
+    private func noteInjectSkipped(_ action: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastSkipLogAt) > 1 else { return }
+        lastSkipLogAt = now
+        MirageLog.input.error("⛔️ \(action, privacy: .public) skipped — Accessibility not granted (AXIsProcessTrusted=false)")
+    }
+
+    /// One-shot confirmation that CGEvents are actually being posted, so a
+    /// successful "received and injected" path is provable from the logs.
+    private func noteInjectionActive(_ action: String) {
+        guard !hasLoggedFirstInjection else { return }
+        hasLoggedFirstInjection = true
+        MirageLog.input.info("✅ Injecting input — first \(action, privacy: .public) posted since launch (Accessibility granted)")
+    }
 
     // MARK: - Accessibility
 
@@ -48,7 +80,20 @@ final class InputInjector {
     /// layer on its own, so the cursor moves freely across every connected
     /// display without us doing anything extra.
     func moveCursor(dx: Float, dy: Float) {
-        guard isAccessibilityGranted else { return }
+        guard isAccessibilityGranted else { noteInjectSkipped("mouseDelta"); return }
+        // Jitter probe: during active movement the iPad streams deltas at up to
+        // 120 Hz (~8 ms apart). A gap in the 33–250 ms band means frames were
+        // dropped while the user was still moving — i.e. visible cursor jitter,
+        // usually from main-thread contention. Idle gaps (>250 ms, finger
+        // lifted) are normal and not logged, so this stays quiet in steady use.
+        let now = Date()
+        if let last = lastMoveCursorAt {
+            let gapMs = now.timeIntervalSince(last) * 1000
+            if gapMs > 33, gapMs < 250 {
+                MirageLog.input.info("Cursor delta gap \(Int(gapMs))ms — possible jitter / main-thread contention")
+            }
+        }
+        lastMoveCursorAt = now
         let currentPos = NSEvent.mouseLocation
         // NSEvent y is flipped relative to CGDisplayBounds. We flip using
         // the *global* frame's max-y so the conversion stays correct on
@@ -65,6 +110,7 @@ final class InputInjector {
                             mouseCursorPosition: next,
                             mouseButton: .left)
         event?.post(tap: .cghidEventTap)
+        noteInjectionActive("mouseDelta")
     }
 
     /// macOS-style pointer acceleration: small deltas stay 1:1,
@@ -89,7 +135,7 @@ final class InputInjector {
     /// trackpad's "natural" rubber-banding and momentum continuation only
     /// kicks in when these phases are present.
     func scroll(dx: Float, dy: Float, phase: ScrollPhase) {
-        guard isAccessibilityGranted else { return }
+        guard isAccessibilityGranted else { noteInjectSkipped("scroll"); return }
         // scrollWheel: unit=pixel, axis1=vertical, axis2=horizontal
         guard let event = CGEvent(
             scrollWheelEvent2Source: nil,
@@ -136,7 +182,7 @@ final class InputInjector {
     // MARK: - Clicks
 
     func click(button: MouseButton, double: Bool = false) {
-        guard isAccessibilityGranted else { return }
+        guard isAccessibilityGranted else { noteInjectSkipped("click"); return }
         let pos = currentCGCursorPosition()
         let (downType, upType, cgBtn) = cgMouseTypes(for: button)
 
@@ -155,6 +201,7 @@ final class InputInjector {
             up?.setIntegerValueField(.mouseEventClickState, value: state)
             up?.post(tap: .cghidEventTap)
         }
+        noteInjectionActive("click")
     }
 
     // MARK: - Keyboard shortcuts
@@ -169,7 +216,7 @@ final class InputInjector {
     /// shortcuts when modifier flags arrive only as side-channel `flags` on
     /// the keydown — they want to see real `flagsChanged` events.
     func sendShortcut(keys: [String]) {
-        guard isAccessibilityGranted else { return }
+        guard isAccessibilityGranted else { noteInjectSkipped("shortcut"); return }
         let (modifiers, keyCode) = parseKeys(keys)
         guard let kc = keyCode else {
             #if DEBUG
@@ -206,6 +253,7 @@ final class InputInjector {
                 up.post(tap: .cghidEventTap)
             }
         }
+        noteInjectionActive("shortcut")
     }
 
     /// Maps a `CGEventFlags` set to the virtual key codes we need to press so
@@ -224,7 +272,7 @@ final class InputInjector {
 
     /// Sends a system-defined media key (e.g., NX_KEYTYPE_PLAY).
     func sendMediaKey(_ keyType: Int32) {
-        guard isAccessibilityGranted else { return }
+        guard isAccessibilityGranted else { noteInjectSkipped("mediaKey"); return }
 
         // System defined key down
         if let down = NSEvent.otherEvent(

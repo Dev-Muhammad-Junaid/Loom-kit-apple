@@ -222,6 +222,12 @@ struct ControlView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+                        // Surface the live connection id so the session can be
+                        // matched against the Mac and a silent session swap is
+                        // visible in the UI.
+                        Text("session \(connection.id.uuidString.prefix(8))")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -245,9 +251,14 @@ struct ControlView: View {
                         onOCR:        { beginCapture(intent: .ocr, mode: .fullScreen) }
                     )
                 }
+                // `ToolbarSpacer` is iOS 26 SDK-only — compile-time gate it
+                // (Xcode 26 / Swift 6.2) so the toolbar still builds on
+                // Xcode 16; the spacer is purely cosmetic on older OSes.
+                #if compiler(>=6.2)
                 if #available(iOS 26.0, *) {
                     ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 }
+                #endif
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(action: onDisconnect) {
                         Image(systemName: "minus.circle")
@@ -362,11 +373,14 @@ struct ControlView: View {
             // But the push itself is a network send that can fail — and a
             // lost `granted` would strand this view on the approval
             // overlay while the Mac thinks the session is live. Poll
-            // until the first status arrives; queries sent while we're
-            // still pending sit buffered host-side and are answered the
-            // moment approval lands. Bounded at 20 attempts (~60 s, past
-            // the host's 45 s pending expiry) so the loop always
-            // terminates even if the view outlives a dead connection.
+            // until a DECISIVE status (granted/denied) arrives — NOT the
+            // initial "pending" the host emits before the user decides.
+            // Queries sent while we're still pending sit buffered host-side
+            // (the host only consumes this connection's inbox after it
+            // authorizes) and are all answered "granted" the moment approval
+            // lands, healing any dropped push. Bounded at 20 attempts
+            // (~60 s, past the host's 45 s pending expiry) so the loop
+            // always terminates even if the view outlives a dead connection.
             Task {
                 for _ in 0..<20 {
                     guard !hasReceivedAuthStatus else { break }
@@ -475,10 +489,22 @@ struct ControlView: View {
                     }
 
                 case let .authorizationStatus(status):
-                    #if DEBUG
-                    print("MirageControliOS: 🔑 authorizationStatus = \(status) (on the handle this ControlView holds)")
-                    #endif
-                    hasReceivedAuthStatus = true
+                    // Always-on so the pending→granted/denied transition is
+                    // visible in Console.app for release/TestFlight, not just
+                    // Xcode-attached DEBUG. `decisive` mirrors the resync-poll
+                    // gate below.
+                    MirageLog.connection.info("🔑 iPad authorizationStatus = \(status, privacy: .public) (decisive=\(status != "pending"))")
+                    // Only a DECISIVE verdict disarms the resync poll. The
+                    // host pushes "pending" the instant the connection lands
+                    // (before the user has decided); treating that as "heard
+                    // back" used to stop the poll immediately, so if the later
+                    // "granted" push was dropped on the wire the iPad sat on
+                    // the approval overlay forever. The poll is precisely the
+                    // recovery path for a lost push — keep it alive until the
+                    // host actually grants or denies.
+                    if status != "pending" {
+                        hasReceivedAuthStatus = true
+                    }
                     lastAuthStatus = status
                     onAuthStatusChanged(status)
 

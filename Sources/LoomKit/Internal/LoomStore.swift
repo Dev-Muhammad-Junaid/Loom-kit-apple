@@ -825,6 +825,30 @@ actor LoomStore {
         }
     }
 
+    /// Returns an existing connection for `peerID` whose authenticated session
+    /// is still live (`.ready`), i.e. an established connection that a newly
+    /// arrived incoming session must not replace.
+    ///
+    /// "Established-connection-wins": a direct-connect dial races its
+    /// transports (`racesLocalCandidates`) and a churny peer can redial while
+    /// its previous link is still working, so a single working connection can
+    /// be shadowed by additional incoming sessions. Tearing down the live link
+    /// to accept the newcomer goodbye-kills the session the peer is actively
+    /// using and triggers an endless reconnect loop.
+    ///
+    /// Liveness is read directly from the underlying session state rather than
+    /// a wall-clock window: a genuine reconnect only lands once the previous
+    /// session is actually dead (`.failed`/`.cancelled`), so the timing of the
+    /// new arrival is irrelevant — only whether the old session still works.
+    private func liveConnection(for peerID: LoomPeerID) async -> ManagedConnection? {
+        for managed in connections.values where managed.peerSnapshot.id == peerID {
+            if await managed.handle.isSessionLive {
+                return managed
+            }
+        }
+        return nil
+    }
+
     /// Tears down any existing connection for a peer to make room for a
     /// fresh session. Called when a new incoming connection from the same
     /// device arrives — the old one is presumed dead.
@@ -1019,13 +1043,30 @@ actor LoomStore {
         await notifyStateChanged()
     }
 
-    private func acceptIncomingSession(_ session: LoomAuthenticatedSession) async {
+    // Test seam: relaxed from `private` to `internal` so
+    // `LoomStoreIncomingDedupTests` can drive the real incoming-session
+    // dedup path ("established-connection-wins") with `@testable import`.
+    // Runtime behavior is unchanged.
+    func acceptIncomingSession(_ session: LoomAuthenticatedSession) async {
         do {
             let peerSnapshot = try await resolveConnectedPeer(
                 preferredPeer: nil,
                 session: session,
                 signalingSessionID: nil
             )
+
+            // Established-connection-wins: if a still-live connection already
+            // exists for this peer, this arrival is a duplicate (transport
+            // race or redundant redial). Drop it and keep the working link
+            // instead of disconnecting the connection the peer is using.
+            if await liveConnection(for: peerSnapshot.id) != nil {
+                LoomLogger.log(
+                    .transport,
+                    "LoomKit dropping duplicate incoming session from \(peerSnapshot.name); keeping established connection"
+                )
+                await session.cancel()
+                return
+            }
 
             await replaceExistingConnection(for: peerSnapshot.id)
 
@@ -1047,6 +1088,17 @@ actor LoomStore {
         _ connection: LoomHostClientConnection
     ) async {
         let peerSnapshot = snapshot(fromHostRecord: connection.descriptor.peer)
+
+        // See acceptIncomingSession: keep an already-established connection
+        // and drop a duplicate rather than tearing down the live link.
+        if await liveConnection(for: peerSnapshot.id) != nil {
+            LoomLogger.log(
+                .transport,
+                "LoomKit dropping duplicate incoming host connection from \(peerSnapshot.name); keeping established connection"
+            )
+            await connection.session.cancel()
+            return
+        }
 
         await replaceExistingConnection(for: peerSnapshot.id)
 

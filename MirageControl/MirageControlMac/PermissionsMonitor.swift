@@ -89,7 +89,15 @@ final class PermissionsMonitor: ObservableObject {
             }
         }
 
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
+        // `@Sendable` is load-bearing: UserNotifications calls this back on
+        // its own internal queue (UNUserNotificationServiceConnection
+        // .call-out), but this type is @MainActor, so without the annotation
+        // Swift 6 infers the closure as main-actor-isolated and the runtime
+        // executor check (`swift_task_isCurrentExecutorImpl`) traps with
+        // `dispatch_assert_queue_fail` the moment it runs off-main. Marking
+        // it @Sendable makes it nonisolated; the Task hop below does the
+        // main-actor write.
+        UNUserNotificationCenter.current().getNotificationSettings { @Sendable settings in
             let status: Status = switch settings.authorizationStatus {
             case .authorized, .provisional: .granted
             case .denied: .denied
@@ -131,7 +139,10 @@ final class PermissionsMonitor: ObservableObject {
         let url = Bundle.main.bundleURL
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, _ in
+        // Same reason as getNotificationSettings above: NSWorkspace invokes
+        // this completion on an arbitrary queue, so it must be @Sendable to
+        // avoid the main-actor executor trap under Swift 6.
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { @Sendable _, _ in
             Task { @MainActor in
                 NSApplication.shared.terminate(nil)
             }

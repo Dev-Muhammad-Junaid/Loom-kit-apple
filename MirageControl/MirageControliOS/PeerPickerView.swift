@@ -117,15 +117,18 @@ struct PeerPickerView: View {
         connecting = peer.deviceID
         errorMessage = nil
 
+        MirageLog.connection.info("📡 Connecting to \(peer.name, privacy: .public) id=\(peer.deviceID, privacy: .public) nearby=\(peer.isNearby)")
         Task {
             do {
                 let handle = try await loomContext.connect(peer)
                 await MainActor.run {
+                    MirageLog.connection.info("📡 Connected to \(peer.name, privacy: .public); awaiting authorization")
                     connecting = nil
                     onConnected(handle, peer.name)
                 }
             } catch {
                 await MainActor.run {
+                    MirageLog.connection.error("📡 Connect failed for \(peer.name, privacy: .public): \(error.localizedDescription, privacy: .public)")
                     connecting = nil
                     withAnimation {
                         errorMessage = "Connection failed: \(error.localizedDescription)"

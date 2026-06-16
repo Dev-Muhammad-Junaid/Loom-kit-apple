@@ -119,6 +119,72 @@ struct LoomConnectionLifecycleTests {
         // The key assertion is that the disconnect callback was invoked.
     }
 
+    // MARK: - Concurrent Multi-Stream Draining (FIX 2)
+
+    @MainActor
+    @Test("Payload on a SECOND default-message stream is delivered without closing the first")
+    func secondMessageStreamIsDrainedConcurrently() async throws {
+        let pair = try await makeLoopbackPair()
+        defer { Task { await pair.stop() } }
+
+        async let clientCtx = pair.client.start(
+            localHello: pair.clientHello,
+            identityManager: pair.clientIdentityManager
+        )
+        async let serverCtx = pair.server.start(
+            localHello: pair.serverHello,
+            identityManager: pair.serverIdentityManager
+        )
+        _ = try await (clientCtx, serverCtx)
+
+        // Server-side handle observing the session. Its incoming-stream
+        // observer must drain every default-message stream concurrently.
+        let serverHandle = LoomConnectionHandle(
+            id: UUID(),
+            peer: makePeerSnapshot(
+                id: pair.clientHello.deviceID,
+                name: pair.clientHello.deviceName,
+                deviceType: pair.clientHello.deviceType
+            ),
+            session: pair.server,
+            transferConfiguration: .default,
+            onStateChanged: { _, _, _ in },
+            onTransferChanged: { _ in },
+            onDisconnected: { _, _ in }
+        )
+        await serverHandle.startObservers()
+
+        // The private default-message stream label from LoomConnectionHandle.
+        let messageLabel = "loomkit.messages.v1"
+        let firstMarker = Data("first-stream-open".utf8)
+        let secondPayload = Data("second-stream-payload".utf8)
+
+        // Open TWO default-message streams over the one session. The first is
+        // opened (and left OPEN) and the distinct assertion payload is sent on
+        // the SECOND. Without FIX 2 the server's single inner `for await` loop
+        // blocks on the first stream, so the second stream's payload buffers
+        // unread until the first closes — and this await times out. With FIX 2
+        // each stream is drained in its own child task, so it arrives promptly.
+        let firstStream = try await pair.client.openStream(label: messageLabel)
+        try await firstStream.send(firstMarker)
+
+        let secondStream = try await pair.client.openStream(label: messageLabel)
+        try await secondStream.send(secondPayload)
+
+        // Collect from the server handle's `messages` stream until the second
+        // stream's distinct payload appears. The first stream is never closed.
+        let received = try await withTimeout(seconds: 5) {
+            for await data in serverHandle.messages {
+                if data == secondPayload {
+                    return data
+                }
+            }
+            return Data()
+        }
+
+        #expect(received == secondPayload)
+    }
+
     // MARK: - Retry Policy
 
     @Test("Retry policy with disabled maxAttempts never retries")
@@ -126,6 +192,39 @@ struct LoomConnectionLifecycleTests {
         let policy = LoomRetryPolicy.disabled
         #expect(policy.isDisabled)
         #expect(policy.maxAttempts == 0)
+    }
+
+    @MainActor
+    @Test("LoomContainer preserves a .disabled retry policy (zero reconnect attempts)")
+    func containerPreservesDisabledRetryPolicy() throws {
+        // Regression: LoomContainer.init rebuilds the configuration to trim the
+        // service name/type and previously omitted `retryPolicy`, silently
+        // substituting `.default` (maxAttempts == 5). An app asking for
+        // `.disabled` therefore still auto-reconnected (the observed
+        // "auto-reconnect attempt 1/5"), re-dialing a peer whose live link had
+        // just been replaced and driving a churn loop.
+        let container = try LoomContainer(
+            for: LoomContainerConfiguration(
+                serviceName: "Retry Policy Device",
+                retryPolicy: .disabled
+            )
+        )
+
+        #expect(container.configuration.retryPolicy.isDisabled)
+        #expect(container.configuration.retryPolicy.maxAttempts == 0)
+    }
+
+    @MainActor
+    @Test("LoomContainer preserves a custom retry policy")
+    func containerPreservesCustomRetryPolicy() throws {
+        let container = try LoomContainer(
+            for: LoomContainerConfiguration(
+                serviceName: "Retry Policy Device",
+                retryPolicy: LoomRetryPolicy(maxAttempts: 3)
+            )
+        )
+
+        #expect(container.configuration.retryPolicy.maxAttempts == 3)
     }
 
     @Test("Retry policy default has sensible values")

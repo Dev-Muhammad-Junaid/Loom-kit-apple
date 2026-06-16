@@ -305,6 +305,11 @@ private struct ConnectionRow: View {
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
+                // Surface the live connection id for matching against the iPad
+                // and spotting silent session swaps.
+                Text("session \(connection.id.uuidString.prefix(8))")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
             }
             Spacer()
             

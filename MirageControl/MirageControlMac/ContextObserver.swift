@@ -279,10 +279,20 @@ final class ContextObserver {
             return
         }
 
+        // Accessibility tree walks run synchronously on the main thread and
+        // can contend with input injection (also main-thread via CGEvent).
+        // Log only slow passes (>16 ms ≈ one display frame) so future cursor-
+        // jitter investigations can correlate stalls with AX work, without
+        // adding any hot-path logging in the common (sub-millisecond) case.
+        let start = Date()
         let snapshot = Self.buildSnapshot(for: app) { [weak self] table in
             self?.buttonElementsByID = table
         }
         updateSnapshot(snapshot)
+        let elapsedMs = Date().timeIntervalSince(start) * 1000
+        if elapsedMs > 16 {
+            MirageLog.context.info("AX recompute slow: \(elapsedMs, format: .fixed(precision: 1))ms — may contend with cursor input")
+        }
     }
 
     private func updateSnapshot(_ snapshot: UIContextSnapshot) {

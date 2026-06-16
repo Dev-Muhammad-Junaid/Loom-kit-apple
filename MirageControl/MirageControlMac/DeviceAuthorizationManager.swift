@@ -99,6 +99,7 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
             pendingConnections.append(connection)
             pendingHandles[connection.id] = handle
             pendingRequestedAt[connection.id] = Date()
+            MirageLog.trust.info("🔑 New pending request from \(connection.peerName, privacy: .public) conn=\(connection.id, privacy: .public) — awaiting Allow/Deny (approve in menu bar or notification)")
             Task {
                 try? await handle.send(.authorizationStatus(status: "pending"))
             }
@@ -139,6 +140,7 @@ final class DeviceAuthorizationManager: NSObject, ObservableObject, UNUserNotifi
                 // also polls `requestAuthorizationStatus`, which is answered
                 // from the (now-consuming) ControlReceiver loop, so a lost
                 // push self-heals within one poll interval.
+                MirageLog.trust.info("🔑 Granting \(connection.peerName, privacy: .public); pushing granted on conn=\(target.id, privacy: .public)")
                 do {
                     try await handle.send(.authorizationStatus(status: "granted"))
                 } catch {

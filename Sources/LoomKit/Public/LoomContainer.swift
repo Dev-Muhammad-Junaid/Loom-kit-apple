@@ -46,7 +46,14 @@ public final class LoomContainer {
             bootstrapMetadataProvider: configuration.bootstrapMetadataProvider,
             remoteSessionID: configuration.remoteSessionID,
             transferConfiguration: configuration.transferConfiguration,
-            directConnectionPolicy: configuration.directConnectionPolicy
+            directConnectionPolicy: configuration.directConnectionPolicy,
+            // Thread the reconnection and rate-limit policies through the
+            // rebuilt configuration. Omitting them silently substituted the
+            // `.default` retry policy (maxAttempts == 5), so an app that asked
+            // for `.disabled` still auto-reconnected — re-dialing a peer whose
+            // live connection had just been replaced and driving a churn loop.
+            retryPolicy: configuration.retryPolicy,
+            messageRateLimitPolicy: configuration.messageRateLimitPolicy
         )
 
         let deviceID = LoomSharedDeviceID.getOrCreate(

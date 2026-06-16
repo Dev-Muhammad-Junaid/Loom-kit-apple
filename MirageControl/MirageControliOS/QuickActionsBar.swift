@@ -583,6 +583,10 @@ private struct FABButton: View {
 
     @ViewBuilder
     private var nativeButton: some View {
+        // Compile-time guard, not just runtime: `.glass` / `.glassProminent`
+        // are iOS 26 SDK symbols (Xcode 26 / Swift 6.2). On Xcode 16 the
+        // branch can't compile, so fall back to `.bordered` variants.
+        #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             if isActive {
                 Button(action: onTap) { icon }
@@ -602,6 +606,16 @@ private struct FABButton: View {
                     .buttonStyle(.bordered)
             }
         }
+        #else
+        if isActive {
+            Button(action: onTap) { icon }
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+        } else {
+            Button(action: onTap) { icon }
+                .buttonStyle(.bordered)
+        }
+        #endif
     }
 
     private var icon: some View {

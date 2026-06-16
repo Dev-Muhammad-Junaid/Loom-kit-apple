@@ -183,7 +183,11 @@ public actor LoomAuthenticatedSession: LoomSessionProtocol {
 
     private let transport: any LoomSessionTransport
     private let incomingStreamContinuation: AsyncStream<LoomMultiplexedStream>.Continuation
-    private let incomingStreamObservers = LoomAsyncBroadcaster<LoomMultiplexedStream>()
+    // Replay opened streams to late subscribers: the receiver's
+    // `LoomConnectionHandle` subscribes its observer slightly after the
+    // session's read loop starts, so a stream `.open` that arrives first
+    // would otherwise be lost (B1 — "stuck awaiting authorization").
+    private let incomingStreamObservers = LoomAsyncBroadcaster<LoomMultiplexedStream>(retainsHistory: true)
     private let stateObservers = LoomAsyncBroadcaster<LoomAuthenticatedSessionState>()
     private let pathObservers = LoomAsyncBroadcaster<LoomSessionNetworkPathSnapshot>()
     private var streams: [UInt16: LoomMultiplexedStream] = [:]

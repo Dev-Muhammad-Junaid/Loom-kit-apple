@@ -87,7 +87,7 @@ public struct LoomConnectionFailure: Error, LocalizedError, Sendable {
         switch error {
         case let .posix(code):
             return classify(code, detail: error.localizedDescription)
-        case .dns, .tls, .wifiAware:
+        case .dns, .tls:
             return LoomConnectionFailure(reason: .other, detail: error.localizedDescription)
         @unknown default:
             return LoomConnectionFailure(reason: .other, detail: error.localizedDescription)

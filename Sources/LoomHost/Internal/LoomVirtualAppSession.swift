@@ -20,7 +20,9 @@ package actor LoomVirtualAppSession: LoomSessionProtocol {
     private let stateObservers = LoomAsyncBroadcaster<LoomAuthenticatedSessionState>()
     private let incomingStreamObservers = LoomAsyncBroadcaster<LoomMultiplexedStream>()
 
-    private var state: LoomAuthenticatedSessionState = .ready
+    // `package`-visible to satisfy the public `LoomSessionProtocol.state`
+    // requirement; still only mutated from within the actor.
+    package private(set) var state: LoomAuthenticatedSessionState = .ready
     private var streams: [UInt16: LoomMultiplexedStream] = [:]
     private var nextOutgoingStreamID: UInt16 = 1
 

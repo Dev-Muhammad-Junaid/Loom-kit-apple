@@ -23,10 +23,8 @@ final class ControlReceiver {
     private var lastActivityAt: [UUID: Date] = [:]
     private var hasPinged: Set<UUID> = []
     private var livenessSweepTask: Task<Void, Never>?
-    #if DEBUG
     /// Sampled counter for high-rate input logging (see consumeMessages).
     private var inputMessageCount = 0
-    #endif
 
     /// Connections silent for longer than this (after having pinged at
     /// least once — i.e. provably heartbeat-capable) are declared dead.
@@ -119,25 +117,23 @@ final class ControlReceiver {
                 #endif
                 continue
             }
-            #if DEBUG
             // Arrival visibility: when the iPad "does nothing", the first
-            // question is whether its messages reach this loop at all.
-            // High-rate input is sampled so the console stays readable.
+            // question is whether its messages reach this loop at all. Logged
+            // through MirageLog (always-on) so this is visible in Console.app
+            // for release/TestFlight builds, not just Xcode-attached DEBUG.
+            // High-rate input is sampled so the stream stays readable.
             switch message {
             case .mouseDelta, .mouseScroll:
                 inputMessageCount += 1
                 if inputMessageCount % 120 == 1 {
-                    print("MirageControl: 📥 input stream alive (\(inputMessageCount) input messages so far)")
+                    MirageLog.input.info("📥 input stream alive (\(self.inputMessageCount) input messages received)")
                 }
             default:
-                print("MirageControl: 📥 dispatching \(message)")
+                MirageLog.connection.debug("📥 dispatching \(String(describing: message), privacy: .public)")
             }
-            #endif
             await dispatch(message, handle: connectionHandle)
         }
-        #if DEBUG
-        print("MirageControl: 📪 message loop ended for a connection (peer disconnected or session replaced)")
-        #endif
+        MirageLog.connection.info("📪 message loop ended for \(connectionHandle.id, privacy: .public) (peer disconnected, revoked, or session replaced)")
     }
 
     private func dispatch(_ message: ControlMessage, handle: LoomConnectionHandle) async {
