@@ -132,7 +132,7 @@ final class MacDaemon: ObservableObject {
                     lastError: nil
                 )
 
-                await DeviceAuthorizationManager.shared.handleIncomingConnection(snapshot, handle: handle)
+                DeviceAuthorizationManager.shared.handleIncomingConnection(snapshot, handle: handle)
             }
             // This loop should live as long as the process. If it ever
             // exits, the host silently stops answering connection requests
@@ -166,28 +166,16 @@ final class MacDaemon: ObservableObject {
 
 @main
 struct MacHostApp: App {
-    @StateObject private var daemon = MacDaemon()
+    // The menu-bar item is created and owned by MirageAppDelegate via
+    // NSStatusItem rather than SwiftUI's MenuBarExtra, so the item's
+    // behavior, visibility, and panel sizing stay under our control.
+    @NSApplicationDelegateAdaptor(MirageAppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra("MirageControl", systemImage: "cursorarrow.rays") {
-            if let container = daemon.container {
-                MacMenuBarView(receiver: daemon.receiver)
-                    .loomContainer(container, autostart: false)
-                    .environmentObject(DeviceAuthorizationManager.shared)
-                    .environmentObject(daemon)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("MirageControl failed to start")
-                        .font(.headline)
-                    Text(daemon.fatalStartupError ?? "Unknown error")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                .padding(16)
-                .frame(width: 280)
-            }
+        // No visible scene. A Settings scene keeps this a valid SwiftUI App
+        // without opening a window; the UI lives in the status-item popover.
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window)
     }
 }

@@ -49,8 +49,10 @@ targets:
         CURRENT_PROJECT_VERSION: 1
         # Required for CGEvent mouse injection
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_IDENTITY: "-"
-        CODE_SIGN_STYLE: Manual
+        # The entitlements this target ships need a real profile, so ad-hoc
+        # ("-") signing cannot satisfy the build.
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: VCBDYB22D9
 
   # ─────────────────────────────────────────────────────────────
   # iOS / iPadOS Client
