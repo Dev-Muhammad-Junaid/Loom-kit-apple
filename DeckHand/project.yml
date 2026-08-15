@@ -84,6 +84,10 @@ targets:
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
         SWIFT_VERSION: 6.0
+        # Needed to run on a real iPad; simulator builds sign ad-hoc and
+        # never exercised this.
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: VCBDYB22D9
 
   # ─────────────────────────────────────────────────────────────
   # Wire-format contract tests (WID-400)
