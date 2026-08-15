@@ -107,3 +107,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.deckhand.tests
         MACOSX_DEPLOYMENT_TARGET: "14.0"
         SWIFT_VERSION: 6.0
+        # Without this the bundle has no Info.plist and code signing refuses
+        # to run, so the suite never gets a chance to execute.
+        GENERATE_INFOPLIST_FILE: YES
