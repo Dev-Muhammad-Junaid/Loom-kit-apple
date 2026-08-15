@@ -49,9 +49,11 @@ final class MirrorStreamService: NSObject {
     /// malicious client can't make the host capture at full resolution
     /// or unbounded rate.
     private static let maxAllowedFPS = 30
-    /// Generous enough for the iPad's expanded view at Retina density;
-    /// still far below native capture, so encode cost stays trivial.
-    private static let maxAllowedWidth = 1280
+    /// Covers the iPad's fully pinched-out mirror at close to Retina
+    /// density; still below native capture, and the latest-frame-wins
+    /// policy below absorbs the extra encode cost by dropping frames
+    /// rather than queueing them.
+    private static let maxAllowedWidth = 1920
 
     // MARK: - State
 

@@ -188,18 +188,27 @@ struct ControlView: View {
             // Floating live-mirror thumbnail (WID-403). Sits above both
             // tabs so the user can keep an eye on the Mac while driving
             // the trackpad or the shortcut deck.
-            .overlay(alignment: .bottomTrailing) {
-                if isMirrorActive {
-                    MirrorThumbnailView(
-                        image: mirrorImage,
-                        onClose: { toggleMirror() },
-                        onExpansionChanged: { expanded in
-                            renegotiateMirror(expanded: expanded)
-                        }
-                    )
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 96)   // clear the gesture button bar
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            .overlay {
+                // The reader supplies the space the mirror may occupy, which
+                // is what bounds its pinch zoom and keeps it draggable only
+                // to somewhere it can still be reached.
+                GeometryReader { proxy in
+                    if isMirrorActive {
+                        MirrorThumbnailView(
+                            image: mirrorImage,
+                            containerSize: proxy.size,
+                            onClose: { toggleMirror() },
+                            onStreamWidthChanged: { streamWidth in
+                                renegotiateMirror(streamWidth: streamWidth)
+                            }
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        .frame(
+                            maxWidth: .infinity,
+                            maxHeight: .infinity,
+                            alignment: .bottomTrailing
+                        )
+                    }
                 }
             }
             .animation(.snappy(duration: 0.2), value: isMirrorActive)
@@ -668,17 +677,17 @@ struct ControlView: View {
         }
     }
 
-    /// Re-negotiates the mirror stream resolution to match the thumbnail
-    /// size: 640px compact, 1024px expanded (sharp text at the 340 pt
-    /// Retina width). Stop+start is cheap — a sub-second hiccup — and the
-    /// sequence counter resets with the new stream so fresh frames aren't
-    /// dropped as stale.
-    private func renegotiateMirror(expanded: Bool) {
+    /// Re-negotiates the mirror stream resolution to match how large the
+    /// user has pinched the thumbnail, so text stays legible as it grows
+    /// without paying for pixels a corner tile would throw away. Stop+start
+    /// is cheap — a sub-second hiccup — and the sequence counter resets with
+    /// the new stream so fresh frames aren't dropped as stale.
+    private func renegotiateMirror(streamWidth: Int) {
         guard let sender, isMirrorActive else { return }
         mirrorLastSeq = 0
         Task {
             await sender.stopMirror()
-            await sender.startMirror(maxWidth: expanded ? 1024 : 640)
+            await sender.startMirror(maxWidth: streamWidth)
         }
     }
 
