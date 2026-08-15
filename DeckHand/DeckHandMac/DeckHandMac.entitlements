@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- AppleScript bridge for Mission Control / App Exposé triggers in
+	     ControlReceiver.dispatchMacro. Required to send key events via
+	     `tell application "System Events" ...`. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+
+	<!-- WID-392: least-privilege audit.
+	     Removed `com.apple.security.cs.allow-dyld-environment-variables` —
+	     it weakens the hardened runtime in shipping builds and is only a
+	     local-debugging convenience (re-enable in a Debug-only .entitlements
+	     if ever needed).
+	     Removed `com.apple.security.device.audio-input` — it was reserved
+	     for an unbuilt "system input level" feature; microphone access is a
+	     high-risk scope to hold speculatively and re-adding it alongside the
+	     actual feature is a one-line change. -->
+
+	<!-- Loom transport: Bonjour discovery + Network.framework sessions. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+
+	<!-- CGEvent injection (input synthesis) needs Accessibility access.
+	     The user grants the actual TCC permission in System Settings; this
+	     entitlement just allows the request flow. -->
+	<key>com.apple.security.temporary-exception.accessibility</key>
+	<true/>
+
+	<!-- Loom identity (P-256 signing key) is stored in the Keychain. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.deckhand.mac</string>
+	</array>
+
+	<!-- Same-iCloud device awareness (disabled — requires a paid developer
+	     account). Uncomment together with DeckHandCloud.isCloudEnabled once
+	     the container is registered in the developer portal.
+
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.deckhand.shared</string>
+	</array>
+	-->
+
+</dict>
+</plist>
