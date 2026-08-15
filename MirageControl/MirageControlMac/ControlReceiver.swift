@@ -38,9 +38,9 @@ final class ControlReceiver {
         lastActivityAt[key] = Date()
         startLivenessSweepIfNeeded()
         connectionTasks[key] = Task { [weak self] in
-            await ActiveAppMonitor.shared.addConnection(connectionHandle, id: key)
-            await RunningAppMonitor.shared.addConnection(connectionHandle, id: key)
-            await ContextObserver.shared.addConnection(connectionHandle, id: key)
+            ActiveAppMonitor.shared.addConnection(connectionHandle, id: key)
+            RunningAppMonitor.shared.addConnection(connectionHandle, id: key)
+            ContextObserver.shared.addConnection(connectionHandle, id: key)
             // Tell the remote up front what this host can actually do, so
             // it can explain missing permissions instead of failing silently.
             await self?.sendCapabilities(to: connectionHandle)
