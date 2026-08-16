@@ -7,6 +7,7 @@
 //  caret menu the user added to the screenshot button.
 //
 
+import CoreGraphics
 import Foundation
 
 /// Describes the slice of the Mac screen the iPad wants captured.
@@ -65,6 +66,38 @@ public enum CaptureMode: Codable, Hashable, Sendable {
         case let .window(windowID):
             try c.encode(Kind.window, forKey: .kind)
             try c.encode(windowID, forKey: .windowID)
+        }
+    }
+}
+
+/// How much fidelity the iPad wants back from a full-screen capture.
+///
+/// Only `.fullScreen` captures are affected: region and window captures are
+/// already sent close to native resolution, so there is nothing to trade
+/// away there. Missing on the wire means `.standard`, which is what every
+/// build before this setting existed sent.
+public enum CaptureQuality: String, Codable, Hashable, Sendable, CaseIterable {
+    case standard
+    case high
+    case native
+
+    /// Longest edge the Mac will downscale to before encoding. `.native`
+    /// leaves the display's own pixel grid alone.
+    public var maxWidth: CGFloat {
+        switch self {
+        case .standard: return 1920
+        case .high: return 2560
+        case .native: return .greatestFiniteMagnitude
+        }
+    }
+
+    /// JPEG compression factor. Climbs with resolution because a sharper
+    /// downscale is wasted if compression artifacts eat the detail back.
+    public var jpegQuality: CGFloat {
+        switch self {
+        case .standard: return 0.75
+        case .high: return 0.85
+        case .native: return 0.95
         }
     }
 }

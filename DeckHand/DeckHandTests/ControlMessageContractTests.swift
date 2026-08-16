@@ -12,7 +12,8 @@
 //       asymmetric encode/decode key usage without requiring Equatable
 //       on the envelope.
 //    2. Back-compat decode rules: optional fields added after 1.0
-//       (`phase` on mouseScroll, `mode` on requestScreenshot) must keep
+//       (`phase` on mouseScroll, `mode` and `quality` on
+//       requestScreenshot) must keep
 //       their documented defaults when absent.
 //    3. Hostile input: unknown `type` must throw, not crash or misroute.
 //
@@ -46,6 +47,7 @@ final class ControlMessageContractTests: XCTestCase {
             .requestScreenshot(requestID: "req-1", mode: .fullScreen),
             .requestScreenshot(requestID: "req-2", mode: .region(x: 0.1, y: 0.2, width: 0.5, height: 0.25)),
             .requestScreenshot(requestID: "req-3", mode: .window(windowID: 4242)),
+            .requestScreenshot(requestID: "req-4", mode: .fullScreen, quality: .native),
             .mediaCommand(action: "playpause"),
             .screenshotData(requestID: "req-1", data: Data([0xFF, 0xD8, 0xFF])),
             .screenshotError(requestID: "req-1", message: "TCC denied"),
@@ -141,11 +143,12 @@ final class ControlMessageContractTests: XCTestCase {
     func testRequestScreenshotWithoutModeDefaultsToFullScreen() throws {
         let legacy = Data(#"{"type":"requestScreenshot","requestID":"abc"}"#.utf8)
         let decoded = try decoder.decode(ControlMessage.self, from: legacy)
-        guard case let .requestScreenshot(requestID, mode) = decoded else {
+        guard case let .requestScreenshot(requestID, mode, quality) = decoded else {
             return XCTFail("Decoded wrong case: \(decoded)")
         }
         XCTAssertEqual(requestID, "abc")
         XCTAssertEqual(mode, .fullScreen, "Legacy requests without mode must default to .fullScreen")
+        XCTAssertEqual(quality, .standard, "Legacy requests without quality must default to .standard")
     }
 
     func testActiveAppUpdateWithNilBundleIDOmitsKey() throws {

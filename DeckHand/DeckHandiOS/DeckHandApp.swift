@@ -9,6 +9,7 @@ import SwiftUI
 @main
 struct DeckHandApp: App {
     let loomContainer: LoomContainer
+    @StateObject private var settings = DeckHandSettings()
 
     init() {
         loomContainer = try! LoomContainer(
@@ -32,6 +33,8 @@ struct DeckHandApp: App {
         WindowGroup {
             ContentRootView()
                 .loomContainer(loomContainer, autostart: false)
+                .environmentObject(settings)
+                .preferredColorScheme(settings.appearance.colorScheme)
         }
     }
 }

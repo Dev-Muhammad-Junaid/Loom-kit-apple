@@ -16,8 +16,15 @@ actor TrackpadSender {
     // ── Timing ──────────────────────────────────────────────────────
     // 120 Hz matches iPad Pro's ProMotion refresh rate so no touch
     // data is thrown away.  On non-ProMotion iPads (60 Hz) this just
-    // means the cap is never hit.
-    private let minimumInterval: Double = 1.0 / 120.0
+    // means the cap is never hit. Settings can drop it to 60 to halve
+    // packet volume when the link is congested.
+    private var minimumInterval: Double = 1.0 / 120.0
+
+    /// Changes the outgoing throttle. Takes effect from the next delta; any
+    /// already-scheduled flush completes on the old interval.
+    func setSendRate(hz: Int) {
+        minimumInterval = 1.0 / Double(max(1, hz))
+    }
 
     // Independent timestamps so that continuous scrolling doesn't starve
     // mouse movement (and vice versa). Previously both streams shared
@@ -204,8 +211,12 @@ actor TrackpadSender {
     /// reject responses that belong to a previous, timed-out request.
     /// `mode` defaults to full-screen so callers that don't care about
     /// region/window capture stay one-liner.
-    func requestScreenshot(requestID: String, mode: CaptureMode = .fullScreen) async {
-        await send(.requestScreenshot(requestID: requestID, mode: mode))
+    func requestScreenshot(
+        requestID: String,
+        mode: CaptureMode = .fullScreen,
+        quality: CaptureQuality = .standard
+    ) async {
+        await send(.requestScreenshot(requestID: requestID, mode: mode, quality: quality))
     }
 
     /// Asks the Mac to enumerate visible windows so the iPad can present a

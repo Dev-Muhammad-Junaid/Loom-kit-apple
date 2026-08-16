@@ -25,6 +25,11 @@ struct MirrorThumbnailView: View {
     /// Fired with the pixel width the host should stream, whenever the
     /// mirror settles into a different resolution tier.
     var onStreamWidthChanged: (Int) -> Void = { _ in }
+    /// Size and position to open at. Values are stored unclamped and bounded
+    /// at render time, because the container is not measured yet on appear.
+    var initialLayout: MirrorLayout?
+    /// Fired whenever a drag or pinch settles, so the layout can be persisted.
+    var onLayoutChanged: (MirrorLayout) -> Void = { _ in }
 
     /// Persisted drag offset (committed at drag end) + live in-drag delta.
     @State private var committedOffset: CGSize = .zero
@@ -117,7 +122,7 @@ struct MirrorThumbnailView: View {
     /// continuous because changing resolution restarts the stream, and that
     /// hiccup shouldn't fire on every pinch frame. The top tier is the
     /// host's ceiling.
-    private static func streamWidth(for width: CGFloat) -> Int {
+    static func streamWidth(for width: CGFloat) -> Int {
         switch width {
         case ..<260: return 640
         case ..<480: return 1024
@@ -142,6 +147,17 @@ struct MirrorThumbnailView: View {
                 commitWidth(restoreWidth)
             }
         }
+        publishLayout()
+    }
+
+    private func publishLayout() {
+        onLayoutChanged(
+            MirrorLayout(
+                width: Double(committedWidth),
+                offsetX: Double(committedOffset.width),
+                offsetY: Double(committedOffset.height)
+            )
+        )
     }
 
     // MARK: - Body
@@ -195,6 +211,7 @@ struct MirrorThumbnailView: View {
                         ),
                         width: width
                     )
+                    publishLayout()
                 }
                 .simultaneously(
                     with: MagnifyGesture()
@@ -207,10 +224,20 @@ struct MirrorThumbnailView: View {
                             // A pinch that shrank the mirror can leave it
                             // parked outside the container it was dragged to.
                             committedOffset = clampOffset(committedOffset, width: committedWidth)
+                            publishLayout()
                         }
                 )
         )
         .onTapGesture { toggleSize() }
+        .onAppear {
+            guard let initialLayout else { return }
+            committedWidth = CGFloat(initialLayout.width)
+            committedOffset = CGSize(
+                width: CGFloat(initialLayout.offsetX),
+                height: CGFloat(initialLayout.offsetY)
+            )
+            restoreWidth = max(committedWidth, Layout.compactWidth)
+        }
         .animation(.snappy(duration: 0.2), value: committedWidth)
         .accessibilityLabel("Live mirror of the Mac screen")
         .accessibilityHint("Drag to move. Pinch to resize. Tap to shrink or restore.")

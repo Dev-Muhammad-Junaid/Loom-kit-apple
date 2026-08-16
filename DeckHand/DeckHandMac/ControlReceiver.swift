@@ -185,8 +185,15 @@ final class ControlReceiver {
             default: break
             }
             
-        case let .requestScreenshot(requestID, mode):
-            Task { await self.handleScreenshotRequest(requestID: requestID, mode: mode, handle: handle) }
+        case let .requestScreenshot(requestID, mode, quality):
+            Task {
+                await self.handleScreenshotRequest(
+                    requestID: requestID,
+                    mode: mode,
+                    quality: quality,
+                    handle: handle
+                )
+            }
 
         case let .requestWindowList(requestID):
             Task { await self.handleWindowListRequest(requestID: requestID, handle: handle) }
@@ -270,6 +277,7 @@ final class ControlReceiver {
     private func handleScreenshotRequest(
         requestID: String,
         mode: CaptureMode,
+        quality: CaptureQuality,
         handle: LoomConnectionHandle
     ) async {
         do {
@@ -280,7 +288,12 @@ final class ControlReceiver {
             let payload: Data
             switch mode {
             case .fullScreen:
-                payload = try await ScreenCaptureService.shared.captureMainDisplayJPEG()
+                // Quality only moves the full-screen path; the region and
+                // window paths below already ship near-native pixels.
+                payload = try await ScreenCaptureService.shared.captureMainDisplayJPEG(
+                    maxWidth: quality.maxWidth,
+                    quality: quality.jpegQuality
+                )
             case let .region(x, y, width, height):
                 let rect = CGRect(
                     x: CGFloat(x),

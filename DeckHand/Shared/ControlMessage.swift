@@ -25,7 +25,7 @@ public enum ControlMessage: Codable, Sendable {
     /// in the response so a slow, late-arriving capture from a previous tap
     /// can't hijack the UI of the next request. `mode` lets the iPad pick
     /// between full-screen, a normalized region, or a single window.
-    case requestScreenshot(requestID: String, mode: CaptureMode)
+    case requestScreenshot(requestID: String, mode: CaptureMode, quality: CaptureQuality = .standard)
     case mediaCommand(action: String)
     case screenshotData(requestID: String, data: Data)
     case screenshotError(requestID: String, message: String)
@@ -119,7 +119,7 @@ public enum ControlMessage: Codable, Sendable {
     // MARK: Codable
 
     private enum CodingKeys: String, CodingKey {
-        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot, requestID, mode, windows, phase, fps, maxWidth, seq, accessibility, screenRecording
+        case type, dx, dy, button, keys, bundleID, bundleIDs, id, status, action, data, name, message, apps, shortcuts, snapshot, requestID, mode, quality, windows, phase, fps, maxWidth, seq, accessibility, screenRecording
     }
 
     private enum MessageType: String, Codable {
@@ -167,11 +167,14 @@ public enum ControlMessage: Codable, Sendable {
         case .authorizationStatus:
             self = .authorizationStatus(status: try c.decode(String.self, forKey: .status))
         case .requestScreenshot:
-            // `mode` is optional for back-compat; missing implies full-screen.
+            // `mode` and `quality` are optional for back-compat; missing
+            // implies a standard-quality full-screen capture.
             let mode = try c.decodeIfPresent(CaptureMode.self, forKey: .mode) ?? .fullScreen
+            let quality = try c.decodeIfPresent(CaptureQuality.self, forKey: .quality) ?? .standard
             self = .requestScreenshot(
                 requestID: try c.decode(String.self, forKey: .requestID),
-                mode: mode
+                mode: mode,
+                quality: quality
             )
         case .requestWindowList:
             self = .requestWindowList(
@@ -280,10 +283,11 @@ public enum ControlMessage: Codable, Sendable {
         case let .authorizationStatus(status):
             try c.encode(MessageType.authorizationStatus, forKey: .type)
             try c.encode(status, forKey: .status)
-        case let .requestScreenshot(requestID, mode):
+        case let .requestScreenshot(requestID, mode, quality):
             try c.encode(MessageType.requestScreenshot, forKey: .type)
             try c.encode(requestID, forKey: .requestID)
             try c.encode(mode, forKey: .mode)
+            try c.encode(quality, forKey: .quality)
         case let .requestWindowList(requestID):
             try c.encode(MessageType.requestWindowList, forKey: .type)
             try c.encode(requestID, forKey: .requestID)

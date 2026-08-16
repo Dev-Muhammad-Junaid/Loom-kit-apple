@@ -19,8 +19,14 @@ struct ControlView: View {
     let onDisconnect: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var settings: DeckHandSettings
     @State private var selectedTab: Tab = .trackpad
     @State private var sender: TrackpadSender?
+    @State private var isSettingsPresented = false
+    /// Stream width the mirror's current on-screen size asks for, before the
+    /// sharpness preference gets a say. Kept so a settings change can
+    /// re-derive the effective width without waiting for another pinch.
+    @State private var mirrorNaturalWidth = 640
 
     // Bidirectional state
     @State private var activeAppName: String?
@@ -198,8 +204,16 @@ struct ControlView: View {
                             image: mirrorImage,
                             containerSize: proxy.size,
                             onClose: { toggleMirror() },
-                            onStreamWidthChanged: { streamWidth in
-                                renegotiateMirror(streamWidth: streamWidth)
+                            onStreamWidthChanged: { naturalWidth in
+                                mirrorNaturalWidth = naturalWidth
+                                renegotiateMirror()
+                            },
+                            initialLayout: settings.rememberMirrorLayout
+                                ? settings.mirrorLayout
+                                : nil,
+                            onLayoutChanged: { layout in
+                                guard settings.rememberMirrorLayout else { return }
+                                settings.mirrorLayout = layout
                             }
                         )
                         .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -257,7 +271,8 @@ struct ControlView: View {
                         onFullScreen: { beginCapture(intent: .fullScreen, mode: .fullScreen) },
                         onRegion:     { beginCapture(intent: .regionPicking, mode: .fullScreen) },
                         onWindow:     { openWindowPicker() },
-                        onOCR:        { beginCapture(intent: .ocr, mode: .fullScreen) }
+                        onOCR:        { beginCapture(intent: .ocr, mode: .fullScreen) },
+                        onPrimary:    { beginDefaultCapture() }
                     )
                 }
                 // `ToolbarSpacer` is iOS 26 SDK-only — compile-time gate it
@@ -269,6 +284,14 @@ struct ControlView: View {
                 }
                 #endif
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isSettingsPresented = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button(action: onDisconnect) {
                         Image(systemName: "minus.circle")
                     }
@@ -276,6 +299,16 @@ struct ControlView: View {
                     .accessibilityLabel("Disconnect")
                 }
             }
+        }
+        .sheet(isPresented: $isSettingsPresented) {
+            SettingsView()
+        }
+        // Mirror settings only take effect on the next stream, so a change
+        // made while the mirror is up has to restart it.
+        .onChange(of: settings.mirrorSharpness) { renegotiateMirror() }
+        .onChange(of: settings.mirrorFrameRate) { renegotiateMirror() }
+        .onChange(of: settings.inputSendRate) { _, rate in
+            Task { await sender?.setSendRate(hz: rate.rawValue) }
         }
         // Screenshot sheet
         .fullScreenCover(isPresented: $isScreenshotPresented) {
@@ -369,6 +402,7 @@ struct ControlView: View {
         .task {
             let s = TrackpadSender(handle: connection)
             sender = s
+            await s.setSendRate(hz: settings.inputSendRate.rawValue)
             // Load cached app list for instant display
             if let cached = Self.loadCachedAppList() {
                 installedApps = cached
@@ -670,24 +704,35 @@ struct ControlView: View {
         if isMirrorActive {
             mirrorLastSeq = 0
             mirrorImage = nil
-            Task { await sender.startMirror() }
+            // Seed from the layout the mirror will restore to, so a large
+            // saved mirror opens at the right resolution instead of starting
+            // small and immediately renegotiating.
+            if settings.rememberMirrorLayout, let saved = settings.mirrorLayout {
+                mirrorNaturalWidth = MirrorThumbnailView.streamWidth(for: CGFloat(saved.width))
+            }
+            let fps = settings.mirrorFrameRate.rawValue
+            let width = settings.mirrorStreamWidth(naturalWidth: mirrorNaturalWidth)
+            Task { await sender.startMirror(fps: fps, maxWidth: width) }
         } else {
             mirrorImage = nil
             Task { await sender.stopMirror() }
         }
     }
 
-    /// Re-negotiates the mirror stream resolution to match how large the
-    /// user has pinched the thumbnail, so text stays legible as it grows
-    /// without paying for pixels a corner tile would throw away. Stop+start
-    /// is cheap — a sub-second hiccup — and the sequence counter resets with
-    /// the new stream so fresh frames aren't dropped as stale.
-    private func renegotiateMirror(streamWidth: Int) {
+    /// Re-negotiates the mirror stream to match how large the user has
+    /// pinched the thumbnail and what the sharpness and frame-rate settings
+    /// ask for, so text stays legible as it grows without paying for pixels a
+    /// corner tile would throw away. Stop+start is cheap — a sub-second
+    /// hiccup — and the sequence counter resets with the new stream so fresh
+    /// frames aren't dropped as stale.
+    private func renegotiateMirror() {
         guard let sender, isMirrorActive else { return }
         mirrorLastSeq = 0
+        let fps = settings.mirrorFrameRate.rawValue
+        let width = settings.mirrorStreamWidth(naturalWidth: mirrorNaturalWidth)
         Task {
             await sender.stopMirror()
-            await sender.startMirror(maxWidth: streamWidth)
+            await sender.startMirror(fps: fps, maxWidth: width)
         }
     }
 
@@ -706,6 +751,16 @@ struct ControlView: View {
     }
 
     // MARK: - Capture flow
+
+    /// Runs whichever capture the user set as the tap action on the capture
+    /// button.
+    private func beginDefaultCapture() {
+        switch settings.defaultCapture {
+        case .fullScreen: beginCapture(intent: .fullScreen, mode: .fullScreen)
+        case .region: beginCapture(intent: .regionPicking, mode: .fullScreen)
+        case .window: openWindowPicker()
+        }
+    }
 
     /// Common entry point for every "ask the Mac to capture something" flow.
     /// Sets the routing intent, allocates a fresh request token, opens the
@@ -732,7 +787,14 @@ struct ControlView: View {
         let requestID = UUID().uuidString
         screenshotRequestID = requestID
 
-        Task { await sender.requestScreenshot(requestID: requestID, mode: mode) }
+        let quality = settings.screenshotQuality
+        Task {
+            await sender.requestScreenshot(
+                requestID: requestID,
+                mode: mode,
+                quality: quality
+            )
+        }
 
         screenshotTimeoutTask?.cancel()
         screenshotTimeoutTask = Task { @MainActor in
@@ -835,6 +897,9 @@ private struct CaptureCapsule: View {
     let onRegion: () -> Void
     let onWindow: () -> Void
     let onOCR: () -> Void
+    /// What a plain tap does, which the user picks in settings. The menu
+    /// still offers every mode.
+    let onPrimary: () -> Void
 
     var body: some View {
         Menu {
@@ -871,7 +936,7 @@ private struct CaptureCapsule: View {
             }
         } primaryAction: {
             guard !isBusy else { return }
-            onFullScreen()
+            onPrimary()
         }
         .disabled(isBusy)
         .accessibilityLabel("Capture")

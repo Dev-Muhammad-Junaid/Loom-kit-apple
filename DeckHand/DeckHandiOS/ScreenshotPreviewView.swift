@@ -12,6 +12,8 @@ struct ScreenshotPreviewView: View {
     let onDismiss: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var settings: DeckHandSettings
+    @State private var didAutoSave = false
     @State private var showShareSheet = false
     @State private var toastMessage: String?
     @State private var imageScale: CGFloat = 1.0
@@ -215,6 +217,14 @@ struct ScreenshotPreviewView: View {
         .onDisappear {
             // Cancel any in-flight toast timer so it doesn't fire against a deallocated view
             toastTask?.cancel()
+        }
+        .task {
+            // Auto-save runs once per capture, on the image as it arrived.
+            // Annotating afterwards is an explicit act, so it gets an
+            // explicit Save rather than silently writing a second asset.
+            guard settings.autoSaveToPhotos, !didAutoSave else { return }
+            didAutoSave = true
+            await saveToPhotos()
         }
     }
 

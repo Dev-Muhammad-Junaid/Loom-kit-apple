@@ -52,21 +52,25 @@ struct MultiTouchTrackpad: UIViewRepresentable {
     let callbacks: TrackpadCallbacks
     let sensitivity: Float
     let scrollMode: Bool
+    var naturalScrolling: Bool = false
 
     func makeUIView(context: Context) -> TouchTrackingView {
         let view = TouchTrackingView()
-        view.callbacks = callbacks
-        view.sensitivity = sensitivity
-        view.scrollMode = scrollMode
+        apply(to: view)
         view.isMultipleTouchEnabled = true
         view.backgroundColor = .clear
         return view
     }
 
     func updateUIView(_ uiView: TouchTrackingView, context: Context) {
-        uiView.callbacks = callbacks
-        uiView.sensitivity = sensitivity
-        uiView.scrollMode = scrollMode
+        apply(to: uiView)
+    }
+
+    private func apply(to view: TouchTrackingView) {
+        view.callbacks = callbacks
+        view.sensitivity = sensitivity
+        view.scrollMode = scrollMode
+        view.naturalScrolling = naturalScrolling
     }
 }
 
@@ -76,6 +80,10 @@ final class TouchTrackingView: UIView {
     var callbacks = TrackpadCallbacks()
     var sensitivity: Float = 1.8
     var scrollMode: Bool = false
+    /// Flips scroll deltas so the content tracks the fingers.
+    var naturalScrolling: Bool = false
+
+    private var scrollSign: Float { naturalScrolling ? -1 : 1 }
 
     // ── Touch tracking state ──────────────────────────────────────
     private var activeTouches: [UITouch] = []
@@ -98,9 +106,6 @@ final class TouchTrackingView: UIView {
     /// `.end` event when the driving fingers lift.
     private var scrollActive = false
 
-    // Pre-allocated haptics
-    private let mediumHaptic = UIImpactFeedbackGenerator(style: .medium)
-    private let heavyHaptic = UIImpactFeedbackGenerator(style: .heavy)
 
     // MARK: - Touches
 
@@ -123,8 +128,6 @@ final class TouchTrackingView: UIView {
             hasMoved = false
             longPressFired = false
 
-            mediumHaptic.prepare()
-            heavyHaptic.prepare()
 
             // Schedule long press (right-click). Re-validate touch state after
             // the sleep so a second finger landing within the 400 ms window
@@ -138,7 +141,7 @@ final class TouchTrackingView: UIView {
                       !self.hasMoved
                 else { return }
                 self.longPressFired = true
-                self.heavyHaptic.impactOccurred()
+                GestureHaptic.heavy.trigger()
                 self.callbacks.onLongPress(loc)
             }
         } else {
@@ -187,7 +190,7 @@ final class TouchTrackingView: UIView {
             if hasMoved {
                 if scrollMode {
                     scrollActive = true
-                    callbacks.onScrollDelta(dx * 0.5, dy * 0.5)
+                    callbacks.onScrollDelta(dx * 0.5 * scrollSign, dy * 0.5 * scrollSign)
                     callbacks.onGestureChanged(.scroll)
                 } else {
                     callbacks.onCursorDelta(dx * sensitivity, dy * sensitivity)
@@ -198,7 +201,7 @@ final class TouchTrackingView: UIView {
         case 2:
             // Scroll — gentler multiplier
             scrollActive = true
-            callbacks.onScrollDelta(dx * 0.5, dy * 0.5)
+            callbacks.onScrollDelta(dx * 0.5 * scrollSign, dy * 0.5 * scrollSign)
             callbacks.onGestureChanged(.scroll)
 
         case 3:
@@ -216,7 +219,7 @@ final class TouchTrackingView: UIView {
                         direction = totalDy > 0 ? .down : .up
                     }
                     threeFingerFired = true
-                    mediumHaptic.impactOccurred()
+                    GestureHaptic.medium.trigger()
                     callbacks.onThreeFingerSwipe(direction)
                     callbacks.onGestureChanged(.threeFingerSwipe(direction))
                 }
@@ -253,12 +256,12 @@ final class TouchTrackingView: UIView {
                     if lastSingleTapTime > 0 && (now - lastSingleTapTime) < 0.35 {
                         // Double-tap
                         lastSingleTapTime = 0
-                        mediumHaptic.impactOccurred()
+                        GestureHaptic.medium.trigger()
                         callbacks.onDoubleTap(touchDownLocation)
                     } else {
                         // Single tap
                         lastSingleTapTime = now
-                        mediumHaptic.impactOccurred()
+                        GestureHaptic.medium.trigger()
                         callbacks.onTap(touchDownLocation)
                     }
                 }

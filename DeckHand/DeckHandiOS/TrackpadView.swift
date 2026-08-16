@@ -11,7 +11,9 @@ struct TrackpadView: View {
     let sender: TrackpadSender
     let colorScheme: ColorScheme
 
-    @State private var sensitivity: Float = TrackpadSensitivity.defaultValue
+    // Sensitivity lives in settings so the inline slider and the settings
+    // page stay in step, and the choice survives relaunch.
+    @EnvironmentObject private var settings: DeckHandSettings
     @State private var scrollMode: Bool = false
     @State private var activeGesture: TrackpadGestureKind?
     @State private var ripplePos: CGPoint?
@@ -69,8 +71,9 @@ struct TrackpadView: View {
                             }
                         }
                     ),
-                    sensitivity: sensitivity,
-                    scrollMode: scrollMode
+                    sensitivity: settings.pointerSensitivity,
+                    scrollMode: scrollMode,
+                    naturalScrolling: settings.naturalScrolling
                 )
                 .clipShape(RoundedRectangle(cornerRadius: DeckHandTheme.Radius.hero))
 
@@ -142,8 +145,8 @@ struct TrackpadView: View {
                         .font(.system(size: 12))
                     Slider(
                         value: Binding(
-                            get: { Double(TrackpadSensitivity.nearestIndex(to: sensitivity)) },
-                            set: { sensitivity = TrackpadSensitivity.anchors[Int($0.rounded())] }
+                            get: { Double(TrackpadSensitivity.nearestIndex(to: settings.pointerSensitivity)) },
+                            set: { settings.pointerSensitivity = TrackpadSensitivity.anchors[Int($0.rounded())] }
                         ),
                         in: TrackpadSensitivity.indexRange,
                         step: 1
@@ -152,18 +155,18 @@ struct TrackpadView: View {
                     Image(systemName: "hare")
                         .foregroundStyle(Color.secondary)
                         .font(.system(size: 12))
-                    Text(TrackpadSensitivity.label(for: sensitivity))
+                    Text(TrackpadSensitivity.label(for: settings.pointerSensitivity))
                         .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
                         .foregroundStyle(Color.secondary)
                         .frame(width: 36, alignment: .trailing)
-                        .accessibilityLabel("Sensitivity \(TrackpadSensitivity.label(for: sensitivity))")
+                        .accessibilityLabel("Sensitivity \(TrackpadSensitivity.label(for: settings.pointerSensitivity))")
                 }
                 // Tick labels aligned under the slider track.
                 HStack {
                     ForEach(TrackpadSensitivity.anchors, id: \.self) { anchor in
                         Text(TrackpadSensitivity.label(for: anchor))
-                            .font(.system(size: 9, weight: anchor == sensitivity ? .semibold : .regular, design: .rounded))
-                            .foregroundStyle(anchor == sensitivity ? Color.primary.opacity(0.7) : Color.secondary.opacity(0.6))
+                            .font(.system(size: 9, weight: anchor == settings.pointerSensitivity ? .semibold : .regular, design: .rounded))
+                            .foregroundStyle(anchor == settings.pointerSensitivity ? Color.primary.opacity(0.7) : Color.secondary.opacity(0.6))
                         if anchor != TrackpadSensitivity.anchors.last {
                             Spacer(minLength: 0)
                         }
@@ -303,7 +306,7 @@ private struct ScrollToggleButton: View {
             withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) {
                 isActive.toggle()
             }
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            GestureHaptic.medium.trigger()
         } label: {
             VStack(spacing: 5) {
                 Image(systemName: isActive ? "scroll.fill" : "scroll")
@@ -372,18 +375,31 @@ enum TrackpadSensitivity {
 
 enum GestureHaptic {
     case light, medium, heavy, double, selection
+    /// Confirmation of a completed action (shortcut recorded, etc.).
+    case success
 
     // Pre-allocated, process-lifetime generators. Constructing a
-    // UIImpactFeedbackGenerator per trigger (the old pattern, ~40 call
-    // sites) both churns the allocator and skips the Taptic Engine
-    // warm-up, making the first pulse of each press feel late.
+    // UIImpactFeedbackGenerator per trigger both churns the allocator and
+    // skips the Taptic Engine warm-up, making the first pulse of each press
+    // feel late. Every haptic in the app goes through here.
     @MainActor private static let lightGen = UIImpactFeedbackGenerator(style: .light)
     @MainActor private static let mediumGen = UIImpactFeedbackGenerator(style: .medium)
     @MainActor private static let heavyGen = UIImpactFeedbackGenerator(style: .heavy)
     @MainActor private static let selectionGen = UISelectionFeedbackGenerator()
+    @MainActor private static let notificationGen = UINotificationFeedbackGenerator()
+
+    /// The user's haptics preference, mirrored here by `DeckHandSettings`.
+    /// Defaults to full so haptics work before settings are constructed.
+    @MainActor static var strength: HapticStrength = .full
 
     @MainActor
     func trigger() {
+        guard let scaled = Self.strength.resolve(self) else { return }
+        scaled.play()
+    }
+
+    @MainActor
+    private func play() {
         switch self {
         case .light:
             Self.lightGen.impactOccurred()
@@ -397,6 +413,9 @@ enum GestureHaptic {
         case .selection:
             Self.selectionGen.selectionChanged()
             Self.selectionGen.prepare()
+        case .success:
+            Self.notificationGen.notificationOccurred(.success)
+            Self.notificationGen.prepare()
         case .double:
             Self.mediumGen.impactOccurred()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
