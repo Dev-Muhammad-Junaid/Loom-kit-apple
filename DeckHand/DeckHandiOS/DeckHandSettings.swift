@@ -205,6 +205,8 @@ final class DeckHandSettings: ObservableObject {
         static let autoSaveToPhotos = "settings.autoSaveToPhotos"
         static let appearance = "settings.appearance"
         static let hasCompletedOnboarding = "settings.hasCompletedOnboarding"
+        /// Owned by `StreamDeckGridView`; the key predates this store.
+        static let hiddenApps = "hiddenBundleIDs"
     }
 
     private let defaults: UserDefaults
@@ -324,5 +326,22 @@ final class DeckHandSettings: ObservableObject {
     /// on-screen size implies.
     func mirrorStreamWidth(naturalWidth: Int) -> Int {
         mirrorSharpness.resolve(naturalWidth: naturalWidth)
+    }
+
+    // MARK: - Hidden apps
+
+    /// Bundle IDs hidden from the Apps grid. Owned by `StreamDeckGridView`
+    /// via `@AppStorage`; read here under the same key and format so hiding
+    /// isn't a one-way door — the grid offers no way back.
+    var hiddenAppBundleIDs: Set<String> {
+        guard let data = defaults.data(forKey: Key.hiddenApps),
+              let decoded = try? JSONDecoder().decode(Set<String>.self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    func unhideAllApps() {
+        defaults.set(try? JSONEncoder().encode(Set<String>()), forKey: Key.hiddenApps)
+        objectWillChange.send()
     }
 }

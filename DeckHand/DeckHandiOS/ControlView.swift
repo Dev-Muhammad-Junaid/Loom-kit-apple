@@ -769,7 +769,7 @@ struct ControlView: View {
     /// `screenshotData` handler based on `screenshotIntent`.
     private func beginCapture(intent: ScreenshotIntent, mode: CaptureMode) {
         guard let sender, !isRequestingScreenshot else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        GestureHaptic.light.trigger()
 
         screenshotImage = nil
         screenshotErrorMessage = nil
@@ -818,7 +818,7 @@ struct ControlView: View {
     /// in parallel so the rows update under the user's finger.
     private func openWindowPicker() {
         guard let sender else { return }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        GestureHaptic.light.trigger()
         isWindowPickerPresented = true
         refreshWindowList(sender: sender)
     }

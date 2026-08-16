@@ -79,7 +79,7 @@ struct WindowPickerView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        GestureHaptic.light.trigger()
                         onRefresh()
                     } label: {
                         if isLoading {
@@ -99,7 +99,7 @@ struct WindowPickerView: View {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                 ForEach(orderedWindows) { window in
                     Button {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        GestureHaptic.medium.trigger()
                         onPick(window)
                     } label: {
                         WindowCell(window: window, colorScheme: colorScheme)
@@ -122,7 +122,7 @@ struct WindowPickerView: View {
                 .font(.system(size: 14, design: .rounded))
                 .foregroundStyle(Color.secondary)
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                GestureHaptic.light.trigger()
                 onRefresh()
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")

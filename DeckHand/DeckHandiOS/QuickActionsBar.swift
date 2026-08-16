@@ -162,9 +162,7 @@ struct QuickActionsBar: View {
             HStack(spacing: 8) {
                 ForEach(ctx.buttons) { button in
                     DialogButtonChip(button: button, colorScheme: colorScheme) {
-                        UIImpactFeedbackGenerator(
-                            style: button.isDefault ? .medium : .light
-                        ).impactOccurred()
+                        (button.isDefault ? GestureHaptic.medium : .light).trigger()
                         Task { await sender.sendContextAction(id: button.id) }
                     }
                 }
@@ -181,7 +179,7 @@ struct QuickActionsBar: View {
         HStack(spacing: 2) {
             if let app = activeApp {
                 AppContextPill(app: app, colorScheme: colorScheme) {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    GestureHaptic.light.trigger()
                     onOpenAppSheet(app)
                 }
                 .id("pill-\(app.bundleID)")
@@ -196,7 +194,7 @@ struct QuickActionsBar: View {
 
             if !otherRunningApps.isEmpty {
                 AppSwitcherMenu(apps: otherRunningApps, colorScheme: colorScheme) { app in
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    GestureHaptic.medium.trigger()
                     Task { await sender.sendLaunchApp(app.bundleID) }
                 }
             }
@@ -244,9 +242,7 @@ struct QuickActionsBar: View {
         HStack(spacing: 5) {
             ForEach(NumpadAction.all) { key in
                 NumpadChip(key: key, colorScheme: colorScheme) {
-                    UIImpactFeedbackGenerator(
-                        style: key.isPrimary ? .medium : .light
-                    ).impactOccurred()
+                    (key.isPrimary ? GestureHaptic.medium : .light).trigger()
                     Task { await sender.sendShortcut(key.keys) }
                 }
             }
@@ -268,7 +264,7 @@ struct QuickActionsBar: View {
             if contextualBindings.isEmpty {
                 if let app = activeApp {
                     AddShortcutsChip(appName: app.displayName, colorScheme: colorScheme) {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        GestureHaptic.light.trigger()
                         onOpenAppSheet(app)
                     }
                 } else {
@@ -279,7 +275,7 @@ struct QuickActionsBar: View {
             } else {
                 ForEach(contextualBindings) { binding in
                     ShortcutChip(binding: binding, colorScheme: colorScheme) {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        GestureHaptic.medium.trigger()
                         Task {
                             await sender.sendAppShortcut(
                                 bundleID: binding.bundleID,
@@ -297,9 +293,7 @@ struct QuickActionsBar: View {
         HStack(spacing: 6) {
             ForEach(TextFieldAction.actions(for: kind)) { action in
                 TextFieldChip(action: action, colorScheme: colorScheme) {
-                    UIImpactFeedbackGenerator(
-                        style: action.isPrimary ? .medium : .light
-                    ).impactOccurred()
+                    (action.isPrimary ? GestureHaptic.medium : .light).trigger()
                     Task { await sender.sendShortcut(action.keys) }
                 }
             }
@@ -309,15 +303,15 @@ struct QuickActionsBar: View {
     private var globalSegment: some View {
         HStack(spacing: 4) {
             IconButton(symbol: "macwindow.on.rectangle", colorScheme: colorScheme) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                GestureHaptic.medium.trigger()
                 Task { await sender.sendMacro("missioncontrol_trigger") }
             }
             IconButton(symbol: "square.grid.3x3.fill", colorScheme: colorScheme) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                GestureHaptic.medium.trigger()
                 Task { await sender.sendMacro("launchpad_trigger") }
             }
             IconButton(symbol: "macwindow", colorScheme: colorScheme) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                GestureHaptic.medium.trigger()
                 Task { await sender.sendMacro("showdesktop") }
             }
         }
@@ -326,15 +320,15 @@ struct QuickActionsBar: View {
     private var mediaSegment: some View {
         HStack(spacing: 4) {
             IconButton(symbol: "backward.fill", colorScheme: colorScheme) {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                GestureHaptic.light.trigger()
                 Task { await sender.sendMediaAction("prev") }
             }
             IconButton(symbol: "playpause.fill", colorScheme: colorScheme) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                GestureHaptic.medium.trigger()
                 Task { await sender.sendMediaAction("playpause") }
             }
             IconButton(symbol: "forward.fill", colorScheme: colorScheme) {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                GestureHaptic.light.trigger()
                 Task { await sender.sendMediaAction("next") }
             }
         }
@@ -822,7 +816,7 @@ private struct DialogInfoButton: View {
     var body: some View {
         if hasInfo {
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                GestureHaptic.light.trigger()
                 showingPopover.toggle()
             } label: {
                 Image(systemName: "exclamationmark.bubble.fill")

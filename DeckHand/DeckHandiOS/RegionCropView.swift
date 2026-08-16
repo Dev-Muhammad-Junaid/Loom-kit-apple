@@ -137,7 +137,7 @@ struct RegionCropView: View {
     private var topBar: some View {
         HStack {
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                GestureHaptic.light.trigger()
                 onConfirm(nil)
             } label: {
                 Text("Cancel")
@@ -156,7 +156,7 @@ struct RegionCropView: View {
 
             // Reset selection
             Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                GestureHaptic.light.trigger()
                 selection = nil
             } label: {
                 Image(systemName: "arrow.counterclockwise")
@@ -174,7 +174,7 @@ struct RegionCropView: View {
         HStack(spacing: 12) {
             Spacer()
             Button {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                GestureHaptic.medium.trigger()
                 guard let normalized = normalizedSelection() else { return }
                 onConfirm(normalized)
             } label: {

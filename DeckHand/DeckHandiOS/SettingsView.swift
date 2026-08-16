@@ -23,6 +23,7 @@ struct SettingsView: View {
                 mirrorSection
                 pointerSection
                 captureSection
+                appsSection
                 appearanceSection
                 connectionSection
                 aboutSection
@@ -145,16 +146,30 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - About
+    // MARK: - Apps
 
-    private var aboutSection: some View {
-        Section {
-            Button("Show the welcome tour again") {
-                settings.hasCompletedOnboarding = false
-                dismiss()
+    /// Only appears once something is hidden. Hiding happens from a context
+    /// menu in the Apps grid, which has no way to undo itself.
+    @ViewBuilder
+    private var appsSection: some View {
+        let hidden = settings.hiddenAppBundleIDs
+        if !hidden.isEmpty {
+            Section {
+                HStack {
+                    Text("Hidden apps")
+                    Spacer()
+                    Text("\(hidden.count)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Button("Show hidden apps") {
+                    settings.unhideAllApps()
+                }
+            } header: {
+                Text("Apps")
+            } footer: {
+                Text("Hidden apps are removed from the Apps grid and its search results. This puts them all back.")
             }
-        } footer: {
-            Text("Rows marked \(Text("Not available").italic()) are visible so you know they're planned, but they do nothing yet.")
         }
     }
 
@@ -193,6 +208,18 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - About
+
+    private var aboutSection: some View {
+        Section {
+            Button("Show the welcome tour again") {
+                settings.hasCompletedOnboarding = false
+                dismiss()
+            }
+        } footer: {
+            Text("Rows marked \(Text("Not available").italic()) are visible so you know they're planned, but they do nothing yet.")
+        }
+    }
 }
 
 // MARK: - Building blocks

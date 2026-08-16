@@ -158,7 +158,7 @@ struct ScreenshotPreviewView: View {
                         label: "Annotate",
                         color: .white
                     ) {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        GestureHaptic.medium.trigger()
                         showAnnotationView = true
                     }
 
@@ -172,7 +172,7 @@ struct ScreenshotPreviewView: View {
                         label: "Text",
                         color: .white
                     ) {
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        GestureHaptic.light.trigger()
                         showOCRView = true
                     }
                 }
@@ -314,7 +314,7 @@ private struct ActionButton: View {
     var body: some View {
         Button(action: {
             guard !isLoading else { return }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            GestureHaptic.light.trigger()
             action()
         }) {
             VStack(spacing: 6) {

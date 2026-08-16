@@ -272,7 +272,7 @@ struct AppShortcutsSheet: View {
         .contentShape(Rectangle())
         .onTapGesture {
             guard section.collapsible else { return }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            GestureHaptic.light.trigger()
             toggle(section)
         }
     }
@@ -366,7 +366,7 @@ struct AppShortcutsSheet: View {
     // MARK: - Actions
 
     private func trigger(_ binding: AppShortcutBinding) {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        GestureHaptic.medium.trigger()
         Task {
             await sender.sendAppShortcut(bundleID: binding.bundleID, keys: binding.keys)
         }
@@ -376,11 +376,11 @@ struct AppShortcutsSheet: View {
         withAnimation(.easeInOut(duration: 0.2)) {
             store.delete(binding)
         }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        GestureHaptic.success.trigger()
     }
 
     private func importFromApp() {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        GestureHaptic.medium.trigger()
         isImporting = true
         withAnimation(.easeInOut(duration: 0.25)) {
             importBanner = "Reading \(app.displayName)'s menu bar…"

@@ -51,7 +51,7 @@ struct OCRResultView: View {
                     if case let .ready(text, _) = state {
                         Button {
                             UIPasteboard.general.string = text
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            GestureHaptic.light.trigger()
                             showToast("Copied to Clipboard")
                         } label: {
                             Label("Copy", systemImage: "doc.on.doc")

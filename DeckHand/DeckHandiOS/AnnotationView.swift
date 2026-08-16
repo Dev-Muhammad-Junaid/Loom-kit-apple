@@ -163,7 +163,7 @@ struct AnnotationView: View {
 
                 // Undo button
                 Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    GestureHaptic.light.trigger()
                     if !strokes.isEmpty { strokes.removeLast() }
                 } label: {
                     Image(systemName: "arrow.uturn.backward.circle.fill")
@@ -177,7 +177,7 @@ struct AnnotationView: View {
 
                 // Clear button
                 Button {
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    GestureHaptic.medium.trigger()
                     withAnimation { strokes.removeAll() }
                 } label: {
                     Image(systemName: "trash.circle.fill")

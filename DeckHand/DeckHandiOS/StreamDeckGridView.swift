@@ -154,6 +154,10 @@ struct StreamDeckGridView: View {
             loadPreferences()
             syncEditFABModeToAX()
         }
+        // Settings can clear the hidden set while this view is alive, so the
+        // decoded copy has to follow the stored one rather than only being
+        // read once on appear.
+        .onChange(of: hiddenData) { _, _ in loadPreferences() }
         .onChange(of: activeBundleID) { _, _ in
             // New frontmost app — reset to whatever AX currently reports
             // for that app so the FAB state is fresh.
@@ -209,7 +213,7 @@ struct StreamDeckGridView: View {
     /// - Otherwise send a `launchApp` so the Mac brings it to the front,
     ///   then open the shortcuts sheet so the user can trigger one.
     private func handleTap(_ app: InstalledAppInfo) {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        GestureHaptic.medium.trigger()
         if app.bundleID != activeBundleID {
             Task { await sender.sendLaunchApp(app.bundleID) }
         }
@@ -225,7 +229,7 @@ struct StreamDeckGridView: View {
             }
             savePreferences()
         }
-        UISelectionFeedbackGenerator().selectionChanged()
+        GestureHaptic.selection.trigger()
     }
 
     private func hideApp(_ app: InstalledAppInfo) {
@@ -234,7 +238,7 @@ struct StreamDeckGridView: View {
             pinnedIDs.remove(app.bundleID)
             savePreferences()
         }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        GestureHaptic.light.trigger()
     }
 
     // MARK: - Persistence
