@@ -59,6 +59,64 @@ enum DeckHandTheme {
     /// (denied overlay, reject buttons, destructive accents).
     static let danger = Color(hex: "EF4444")
 
+    // MARK: Brand surface (sampled from the app icon)
+
+    /// The icon is a 3×3 grid of glass tiles on near-black, lit by a violet
+    /// core and one mint-outlined tile. These are those colors, so the
+    /// first-run surfaces read as an extension of the icon rather than a
+    /// different product.
+    enum Brand {
+        /// Base canvas — near-black with a blue cast, not neutral grey.
+        static let ink = Color(hex: "07070F")
+        /// Slightly lifted ink for tiles and cards sitting on `ink`.
+        static let inkRaised = Color(hex: "10101E")
+        /// The violet core of the lit tile.
+        static let glow = Color(hex: "7C5CFF")
+        /// The cooler periwinkle the lit tile falls off into.
+        static let glowSoft = Color(hex: "6E86FF")
+        /// The mint outline on the top-right tile.
+        static let mint = Color(hex: "3DE0B0")
+        /// Hairline stroke on unlit glass tiles.
+        static let tileStroke = Color.white.opacity(0.09)
+
+        static var litTileGradient: LinearGradient {
+            LinearGradient(
+                colors: [Color(hex: "9E7BFF"), glow, glowSoft],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+
+        static var unlitTileGradient: LinearGradient {
+            LinearGradient(
+                colors: [inkRaised, ink],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+    }
+
+    /// Full-bleed brand background: near-black with the icon's two light
+    /// sources — a violet bloom just above center and a cooler mint cast in
+    /// the top-right corner.
+    static func brandBackground() -> some View {
+        ZStack {
+            Brand.ink
+            RadialGradient(
+                colors: [Brand.glow.opacity(0.30), Brand.glow.opacity(0.06), .clear],
+                center: UnitPoint(x: 0.5, y: 0.34),
+                startRadius: 8,
+                endRadius: 420
+            )
+            RadialGradient(
+                colors: [Brand.mint.opacity(0.14), .clear],
+                center: UnitPoint(x: 0.92, y: 0.08),
+                startRadius: 4,
+                endRadius: 260
+            )
+        }
+    }
+
     enum Radius {
         static let sm: CGFloat = 12
         static let md: CGFloat = 14
@@ -220,52 +278,6 @@ enum DeckHandTheme {
 
     static var headerGradientColors: [Color] {
         [violet, violetSoft]
-    }
-
-    // MARK: Hero sunset gradient (device picker / first-run hero background)
-
-    /// Soft cherry-blossom-sunset palette used as the hero background on the
-    /// device picker. 9 stops arranged in a 3×3 mesh: lavender top, pink
-    /// middle, deep violet bottom. Pair with `MeshGradient` (iOS 18+) or fall
-    /// back to a 3-stop `LinearGradient` using the first/middle/last colors.
-    static let heroSunsetColors: [Color] = [
-        // top — lavender / pale pink sky
-        Color(red: 0.86, green: 0.80, blue: 0.92),
-        Color(red: 0.90, green: 0.83, blue: 0.94),
-        Color(red: 0.88, green: 0.81, blue: 0.93),
-        // middle — pink blossom haze
-        Color(red: 0.93, green: 0.70, blue: 0.82),
-        Color(red: 0.90, green: 0.62, blue: 0.78),
-        Color(red: 0.86, green: 0.58, blue: 0.78),
-        // bottom — deep violet
-        Color(red: 0.56, green: 0.28, blue: 0.72),
-        Color(red: 0.50, green: 0.22, blue: 0.70),
-        Color(red: 0.60, green: 0.32, blue: 0.78)
-    ]
-
-    /// Drop-in hero background view. Uses native `MeshGradient` on iOS 18+
-    /// for the dreamy multi-point blend, falls back to a vertical
-    /// `LinearGradient` (top→middle→bottom of `heroSunsetColors`) on iOS 17.
-    @ViewBuilder
-    static func heroSunsetBackground() -> some View {
-        if #available(iOS 18.0, macOS 15.0, *) {
-            MeshGradient(
-                width: 3,
-                height: 3,
-                points: [
-                    [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
-                    [0.0, 0.5], [0.5, 0.5], [1.0, 0.5],
-                    [0.0, 1.0], [0.5, 1.0], [1.0, 1.0]
-                ],
-                colors: heroSunsetColors
-            )
-        } else {
-            LinearGradient(
-                colors: [heroSunsetColors[1], heroSunsetColors[4], heroSunsetColors[7]],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        }
     }
 
     // MARK: Status icons (auth overlay, pending dialog)

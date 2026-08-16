@@ -25,6 +25,7 @@ struct SettingsView: View {
                 captureSection
                 appearanceSection
                 connectionSection
+                aboutSection
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
@@ -141,6 +142,19 @@ struct SettingsView: View {
             Text("Screenshots")
         } footer: {
             Text("Quality applies to full-screen captures. Region and window captures already ship at close to native resolution. Saving automatically asks for Photos access the first time a capture lands.")
+        }
+    }
+
+    // MARK: - About
+
+    private var aboutSection: some View {
+        Section {
+            Button("Show the welcome tour again") {
+                settings.hasCompletedOnboarding = false
+                dismiss()
+            }
+        } footer: {
+            Text("Rows marked \(Text("Not available").italic()) are visible so you know they're planned, but they do nothing yet.")
         }
     }
 

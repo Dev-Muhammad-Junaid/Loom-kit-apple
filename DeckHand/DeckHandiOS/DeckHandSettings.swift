@@ -204,6 +204,7 @@ final class DeckHandSettings: ObservableObject {
         static let defaultCapture = "settings.defaultCapture"
         static let autoSaveToPhotos = "settings.autoSaveToPhotos"
         static let appearance = "settings.appearance"
+        static let hasCompletedOnboarding = "settings.hasCompletedOnboarding"
     }
 
     private let defaults: UserDefaults
@@ -278,6 +279,11 @@ final class DeckHandSettings: ObservableObject {
         didSet { defaults.set(appearance.rawValue, forKey: Key.appearance) }
     }
 
+    // ── First run ───────────────────────────────────────────────────
+    @Published var hasCompletedOnboarding: Bool {
+        didSet { defaults.set(hasCompletedOnboarding, forKey: Key.hasCompletedOnboarding) }
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
@@ -308,6 +314,8 @@ final class DeckHandSettings: ObservableObject {
 
         appearance = (defaults.string(forKey: Key.appearance)
             .flatMap(AppearanceMode.init(rawValue:))) ?? .system
+
+        hasCompletedOnboarding = defaults.bool(forKey: Key.hasCompletedOnboarding)
 
         GestureHaptic.strength = hapticStrength
     }

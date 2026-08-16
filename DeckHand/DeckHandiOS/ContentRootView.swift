@@ -8,10 +8,27 @@ import SwiftUI
 
 struct ContentRootView: View {
     @Environment(\.loomContext) private var loomContext
+    @EnvironmentObject private var settings: DeckHandSettings
     @State private var activeConnection: (handle: LoomConnectionHandle, peerName: String)?
     @State private var authStatus: String = "pending"
 
     var body: some View {
+        ZStack {
+            main
+
+            if !settings.hasCompletedOnboarding {
+                OnboardingView {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        settings.hasCompletedOnboarding = true
+                    }
+                }
+                .transition(.opacity)
+                .zIndex(1)
+            }
+        }
+    }
+
+    private var main: some View {
         Group {
             if let connection = activeConnection {
                 ZStack {
