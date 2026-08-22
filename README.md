@@ -1,310 +1,217 @@
-# Loom
-
-Build high-throughput, low-latency Apple device-to-device features without building a networking stack from scratch.
-
-Loom is a Swift package for apps that need to find other devices, connect directly, verify identity, make trust decisions, and keep working when the local network is not the whole story.
-
-It is designed for Apple platforms, stays product-agnostic, and gives you a clean base for the part every multi-device app eventually has to build. The transport is built for high-throughput, low-latency data movement between Apple devices, and the package includes a SwiftUI-first `LoomKit` surface for apps that want a plug-and-play integration path.
-
-If you want the default integration path, start with `LoomKit`. Drop down to `Loom` only when you need to own discovery, advertising, handshake policy, or transport composition yourself.
-
-Used in [MirageKit](https://github.com/EthanLipnik/MirageKit).
-
-## Why developers use Loom
-
-If you are building something that talks to another device, you usually end up piecing together:
-
-- discovery
-- direct connections
-- identity
-- trust
-- remote reachability
-- diagnostics
-
-Loom gives you those building blocks as a reusable Swift package.
-
-That means you can focus on your app's behavior instead of spending weeks rebuilding networking plumbing.
-
-## What you can build with it
-
-Loom is a good fit for things like:
-
-- Mac and iPhone companion apps
-- local-first collaboration tools
-- device control surfaces
-- host and client apps on the same network
-- pro apps that need to discover and connect to nearby machines
-- products that start local but eventually need remote coordination
-
-## What Loom gives you
-
-### SwiftUI-first package: `LoomKit`
-
-- One shared `LoomContainer` per app or scene, modeled after SwiftData's `ModelContainer`
-- Main-actor `LoomContext` injected through SwiftUI environment values
-- Live `@LoomQuery` peer, connection, and transfer snapshots for SwiftUI lists
-- Actor-backed `LoomConnectionHandle` values for message streams, file transfer, and custom multiplexed streams
-- Optional CloudKit-backed peer merging and signaling-backed remote reachability without changing the app-facing API
-
-### Core package: `Loom`
-
-- Nearby peer discovery over Bonjour, including peer-to-peer support
-- Direct sessions built on `Network.framework`
-- Stable device identity and key management
-- Pluggable trust policy and local trust storage
-- Seed-driven overlay discovery for Tailscale, Headscale, and other VPN-style networks
-- Remote reachability support with signaling presence and network probing
-- Bootstrap tools for flows like Wake-on-LAN and SSH handoff
-- Diagnostics and instrumentation hooks
-
-### App-facing shell package: `LoomShell`
-
-- Loom-native interactive shell sessions over authenticated Loom transport
-- macOS PTY host runtime for building a native host app quickly
-- Connection policy that prefers Loom-native direct paths before SSH fallback
-- Signaling publication helpers for introducer-only remote access
-- OpenSSH fallback runtime with password or private-key authentication
-- Connection attempt reports that are usable in product UI
-
-### Optional package: `LoomCloudKit`
-
-- CloudKit-backed peer sharing
-- CloudKit-backed trust decisions
-- Share and participant management for multi-device apps
-
-## What Loom does not do
-
-This part matters, especially if you are new to this space.
-
-Loom is the transport layer, not the product layer.
-
-Loom does not decide:
-
-- your app's protocol
-- your message schema
-- your UI
-- your product roles
-- your CloudKit schema naming
-
-Your app owns those decisions. Loom gives you the network foundation underneath them.
-
-## How Loom compares
-
-For most apps, the practical comparison is `LoomKit` on top of `Loom` versus `MultipeerConnectivity` or a MultipeerKit-style convenience layer.
-
-The main question is whether you want a convenient local-session API only, or a SwiftUI-first path that still has identity, trust, diagnostics, and remote growth underneath it.
-
-| Capability | `Loom` | `MultipeerConnectivity` |
-| --- | --- | --- |
-| Networking model | Bonjour discovery plus direct `Network.framework` sessions you can reason about and extend | High-level Apple-managed local peer sessions |
-| Identity model | Stable device identity and signed session setup are first-class | Peer identity is mostly session-oriented and app-specific trust modeling is left to you |
-| Trust decisions | Explicit trust providers and local trust storage | Invitation and certificate hooks exist, but there is no Loom-style trust layer to plug into your product |
-| Remote growth path | Includes signaling/STUN support and optional `LoomCloudKit` peer sharing and trust | Focused on nearby/local networking with no built-in remote reachability story |
-| Product boundaries | Keeps your protocol, schema, and app roles above the transport layer | Easy to start, but the framework shape tends to leak into the rest of your app architecture |
-| Diagnostics and operability | Built-in diagnostics and instrumentation hooks | Much thinner observability surface |
-| Best fit | Apps that need a durable multi-device architecture, not just nearby messaging | Quick local-first prototypes or simple nearby collaboration |
-
-If your app only needs nearby discovery and a session quickly, `MultipeerConnectivity` is fine.
-
-If you want the closest Loom equivalent to that convenience class of API, start with `LoomKit`.
-
-If you need identity, trust, diagnostics, and a path beyond the local network, Loom's stack is the better foundation.
-
-## Tailscale and custom overlays
-
-Loom can treat Tailscale and other overlay networks as direct connectivity instead of forcing those peers through signaling-only flows. The model is intentionally simple: publish a small overlay probe listener on each Loom host, and provide `LoomOverlayDirectory` with the host names or IP addresses your app already trusts.
-
-That means Loom does not depend on a specific control plane. You can feed the directory with MagicDNS names, stable overlay IPs, or results from your own inventory service:
-
-```swift
-let configuration = LoomContainerConfiguration(
-    serviceType: "_studio._tcp",
-    serviceName: "Studio Mac",
-    overlayDirectory: LoomOverlayDirectoryConfiguration(
-        probePort: Loom.defaultOverlayProbePort,
-        refreshInterval: .seconds(30),
-        probeTimeout: .seconds(2),
-        seedProvider: {
-            [
-                LoomOverlaySeed(host: "studio-mac.tailnet.example"),
-                LoomOverlaySeed(host: "100.64.0.25"),
-            ]
-        }
-    )
-)
-```
-
-When a peer is visible through both the overlay and remote signaling, Loom prefers the direct overlay route and still preserves signaling fallback if that host is temporarily unreachable.
-
-## Installation
-
-Add Loom to your `Package.swift`:
-
-```swift
-dependencies: [
-    .package(url: "https://github.com/EthanLipnik/Loom.git", from: "1.4.0")
-]
-```
-
-Then add the product you want to your target:
-
-For most apps, `LoomKit` should be the default dependency.
-
-```swift
-.target(
-    name: "MyApp",
-    dependencies: [
-        .product(name: "LoomKit", package: "Loom"),
-        // Or drop down to the lower-level primitives:
-        // .product(name: "Loom", package: "Loom"),
-        // Add this if you want the optional terminal/session layer:
-        // .product(name: "LoomShell", package: "Loom"),
-        // Add this too if you want CloudKit-backed peer sharing or trust:
-        // .product(name: "LoomCloudKit", package: "Loom"),
-    ]
-)
-```
-
-## SwiftUI-first quickstart
-
-If you want something in the MultipeerKit class of ergonomics, start with `LoomKit`.
-
-`LoomKit` is modeled more like SwiftData than like raw networking services:
-
-- `LoomContainer` owns the runtime
-- `LoomContext` is the main-actor action surface
-- `@LoomQuery` gives SwiftUI live snapshots
-- `LoomConnectionHandle` owns the long-lived async streams
-
-```swift
-import LoomKit
-import SwiftUI
-
-@main
-struct StudioLinkApp: App {
-    let loomContainer = try! LoomContainer(
-        for: .init(
-            serviceType: "_studiolink._tcp",
-            serviceName: "Studio Mac",
-            deviceIDSuiteName: "group.com.example.studiolink"
-        )
-    )
-
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        .loomContainer(loomContainer)
-    }
-}
-```
-
-```swift
-import LoomKit
-import SwiftUI
-
-struct ContentView: View {
-    @Environment(\.loomContext) private var loomContext
-    @LoomQuery(.peers(sort: .name)) private var peers: [LoomPeerSnapshot]
-
-    var body: some View {
-        List(peers) { peer in
-            Button(peer.name) {
-                Task {
-                    let connection = try await loomContext.connect(peer)
-                    try await connection.send("hello")
-                }
-            }
-        }
-        .task {
-            for await connection in loomContext.incomingConnections {
-                Task {
-                    for await message in connection.messages {
-                        print("Received", message.count, "bytes")
-                    }
-                }
-            }
-        }
-    }
-}
-```
-
-That is the intended default. You can add CloudKit-backed peer sharing, trust, and signaling publication through `LoomContainerConfiguration` without changing the SwiftUI-facing API shape.
-
-## Build from primitives when needed
-
-If you need full control over discovery, advertising, or handshake policy, drop down to `Loom`.
-
-The main type there is `LoomNode`. It owns discovery, advertising, sessions, and the identity and trust collaborators you inject into it.
-
-```swift
-import Loom
-
-let node = LoomNode(
-    configuration: LoomNetworkConfiguration(
-        serviceType: "_myapp._tcp",
-        enablePeerToPeer: true
-    ),
-    identityManager: LoomIdentityManager.shared
-)
-
-let discovery = node.makeDiscovery()
-discovery.onPeersChanged = { peers in
-    print("Peers:", peers.map(\.name))
-}
-discovery.startDiscovery()
-```
-
-Use `LoomNode` when you want to own the full runtime boundary yourself. Use `LoomKit` when you want the repo to feel closer to SwiftUI + SwiftData.
-
-## The simple mental model
-
-1. `LoomKit` is the app-facing path for SwiftUI apps.
-2. `LoomNode` is the lower-level transport composition root.
-3. `LoomConnectionHandle` and `LoomAuthenticatedSession` are the live data paths.
-4. Your app still owns protocol semantics, product policy, and UI behavior.
-
-That split is what keeps Loom reusable instead of turning it into someone else's app framework.
+# Deck Hand
+
+Turn an iPad into a control surface for your Mac.
+
+Deck Hand is a pair of apps — a menu bar host on the Mac and a remote on iPad or
+iPhone — that discover each other on the local network and connect directly. The
+remote gives you a precision trackpad, a live view of the Mac's screen, capture
+tools, an app launcher, and shortcut chips that change with whatever app is
+frontmost.
+
+Everything runs peer-to-peer over [Loom](#the-loom-package), which is vendored in
+this repository. As shipped there is no account, no relay, and no cloud service
+in the path. CloudKit-backed "same iCloud account" awareness and internet
+reachability are wired up but switched off in `Shared/DeckHandCloud.swift`, since
+both need a paid developer account and a registered container.
+
+## What it does
+
+**Pointer and keyboard.** A multi-touch trackpad with adjustable sensitivity,
+two-finger scrolling with native phase and momentum (so the Mac rubber-bands like
+a real trackpad rather than emitting wheel ticks), clicks, double-clicks, and
+keyboard shortcuts.
+
+**Live mirror.** A floating thumbnail streams the Mac's screen as JPEG frames.
+Pinch it and it grows to roughly full screen, renegotiating resolution in tiers
+as it goes, up to 1920 px wide. Drag it anywhere; it stays inside the safe area
+and can remember where you left it.
+
+**Capture.** Full screen, a cropped region, or a single window picked from a live
+list. Captures land in a preview where you can annotate them, run text
+recognition on them with Vision, or save them to Photos — automatically, if you
+turn that on.
+
+**Apps and shortcuts.** Browse and launch installed apps, see what is running in
+Cmd-Tab order, and get per-app shortcut chips. Deck Hand reads the frontmost
+app's menu bar over Accessibility, so the chips reflect that app's real
+shortcuts instead of a hard-coded list.
+
+**Context-aware actions.** When a dialog or sheet is up on the Mac, its buttons
+appear on the remote as chips, so "Don't Save / Cancel / Save" is one tap away
+instead of a trackpad trip across the screen.
+
+**Media keys** for playback control round it out.
+
+## Settings
+
+The remote exposes the knobs that cost bandwidth or host CPU, deliberately as
+manual controls rather than an automatic heuristic:
+
+| Setting | Options |
+| --- | --- |
+| Mirror frame rate | 15 / 20 / 30 fps (the host clamps at 30) |
+| Mirror sharpness | Auto (follows pinch size), Battery saver (640 px), Sharp (1920 px) |
+| Screenshot quality | Standard, High, Native |
+| Input send rate | 60 Hz, or 120 Hz to match ProMotion |
+| Pointer sensitivity | Continuous |
+| Natural scrolling | On / off |
+| Haptics | Off / Light / Full, respected app-wide |
+| Default capture action | Which capture the main button triggers |
+| Auto-save to Photos | On / off |
+| Appearance | System / light / dark |
+
+Hidden apps can also be restored from here, and the first-run tour can be
+replayed.
+
+## How it works
+
+The Mac advertises `_deckhand._tcp` over Bonjour and the remote browses for it.
+`LoomKit` handles discovery, the direct connection, device identity, and the
+trust decision. Every connection has to be approved on the Mac, and that approval
+is deliberately not persisted — a fresh host launch prompts again, because
+auto-granting from stored state proved too easy to get wrong.
+
+Above the transport, both apps speak a single `Codable` enum, `ControlMessage`,
+defined once in `DeckHand/Shared/` and compiled into both targets so the wire
+format cannot drift between them. A few details worth knowing:
+
+- **Liveness is proven at the protocol level.** Transport state lags badly after
+  an abrupt kill — buffered streams, half-open TCP — so each side pings every two
+  seconds and trusts only recent traffic. Miss the pongs and the remote returns
+  to the picker rather than showing a session that is already dead.
+- **The host advertises what it can actually do.** `hostCapabilities` reports
+  whether Accessibility and Screen Recording are granted, so the remote can say
+  the Mac is missing a permission instead of letting taps fail silently.
+- **Optional fields decode with defaults**, which is how capture quality was
+  added without breaking older builds.
+
+The wire format has contract tests. If you change `ControlMessage`, run them.
 
 ## Requirements
 
-- Swift 6.2+
-- macOS 14+
-- iOS 17.4+
-- visionOS 26+
+- macOS 14 or later (host)
+- iOS / iPadOS 17.4 or later (remote — built for iPhone and iPad)
+- Xcode 16, Swift 6
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
 
-## Local network setup
+## Build and run
 
-Apps using Loom's Bonjour discovery and advertising must declare the required keys in their Info.plist. Without them, the system denies local network access and `NWBrowser` fails with error `-65555 (NoAuth)`.
+The Xcode project is generated and not checked in, so generate it first:
 
-Add both of these to your app target's Info.plist, replacing the service type with the one you pass to Loom:
-
-```xml
-<key>NSBonjourServices</key>
-<array>
-    <string>_yourapp._tcp</string>
-</array>
-
-<key>NSLocalNetworkUsageDescription</key>
-<string>This app uses the local network to discover and connect to nearby devices.</string>
+```bash
+cd DeckHand
+xcodegen generate
+open DeckHand.xcodeproj
 ```
 
-For App Store distribution, you also need the `com.apple.developer.networking.multicast` entitlement. Request it through your Apple Developer account.
+Both app targets use automatic signing and are pinned to the original author's
+team, so set `DEVELOPMENT_TEAM` in `DeckHand/project.yml` to your own and
+regenerate before building to a device. Bundle identifiers are `com.deckhand.mac`
+and `com.deckhand.ios`.
 
-In debug builds, Loom asserts on missing keys at startup so you see a clear message instead of the opaque system error. See the [Configure Local Network Access](https://ethanlipnik.github.io/Loom/documentation/loom/configurelocalnetworkaccess) documentation article for more detail, including how to reset permissions during development.
+From the command line:
 
-## Learn more
+```bash
+xcodebuild -project DeckHand.xcodeproj -scheme DeckHandMac  -destination 'platform=macOS' build
+xcodebuild -project DeckHand.xcodeproj -scheme DeckHandiOS  -destination 'generic/platform=iOS' build
+xcodebuild -project DeckHand.xcodeproj -scheme DeckHandTests -destination 'platform=macOS' test
+```
 
-If you want the deeper material, go to the docs:
+Launch the Mac app through Finder or LaunchServices rather than running the
+built executable directly — see [the note below](#a-macos-26-gotcha).
 
-- [LoomKit Documentation](https://ethanlipnik.github.io/Loom/documentation/loomkit/)
-- [Loom Documentation](https://ethanlipnik.github.io/Loom/documentation/loom/)
-- [LoomShell Documentation](https://ethanlipnik.github.io/Loom/documentation/loomshell/)
-- [Architecture notes](Architecture.md)
+Both platforms' app icons are regenerated from a single square master image. iOS
+gets it full-bleed since the system masks it; macOS icons are pre-masked with the
+squircle and Apple's grid margin baked in:
 
-## Development
+```bash
+swift Scripts/make-app-icons.swift <master.png>
+```
+
+## Permissions
+
+The Mac host needs these granted in System Settings before it is useful:
+
+- **Accessibility** — required for pointer and keyboard injection, menu bar
+  shortcut discovery, and dialog buttons.
+- **Screen Recording** — required for captures and the live mirror.
+- **Local Network** — required for discovery on both sides.
+
+The remote asks for **Photos** access only when you save a capture.
+
+Because permissions are keyed to the bundle identifier, changing it means
+granting them again.
+
+## A macOS 26 gotcha
+
+Repeatedly launching a menu bar app's executable directly — as Xcode's Run button
+does — can poison the bundle identifier's status item state on macOS 26, after
+which the icon never appears again for that identifier, on that machine, with no
+supported way to clear it. It looks exactly like a broken `MenuBarExtra`, which
+sends you chasing the wrong bug.
+
+The investigation and the fix are written up in
+[DeckHand/MenuBarStatusItems-macOS26.md](DeckHand/MenuBarStatusItems-macOS26.md).
+Worth reading before you debug a missing status item.
+
+## Repository layout
+
+```
+DeckHand/
+  DeckHandMac/     macOS host: capture, input injection, Accessibility, menu bar
+  DeckHandiOS/     iPad/iPhone remote: trackpad, mirror, capture UI, settings
+  Shared/          ControlMessage and every type that crosses the wire
+  DeckHandTests/   Wire-format contract tests
+  Scripts/         App icon generation
+  project.yml      XcodeGen project definition
+Sources/           The Loom Swift package
+Tests/             Loom package tests
+```
+
+## The Loom package
+
+This repository is a fork of [Loom](https://github.com/EthanLipnik/Loom) by Ethan
+Lipnik, the Swift package Deck Hand is built on. Loom is product-agnostic
+networking for Apple platforms: Bonjour discovery, direct `Network.framework`
+sessions, stable device identity, pluggable trust, overlay-network support for
+Tailscale-style setups, remote reachability, and diagnostics. It ships five
+library products — `Loom`, `LoomKit`, `LoomShell`, `LoomCloudKit`, and
+`LoomSharedRuntime`. Deck Hand uses `LoomKit`, the SwiftUI-first surface.
+
+This fork does not track upstream closely and the package here has diverged: it
+adds local-network diagnostics, a telemetry exporter, a SwiftUI diagnostics view,
+a retry policy, and a Bonjour entitlement check, along with smaller changes to
+logging, discovery, and session security.
+
+The package still builds and tests independently of the apps:
 
 ```bash
 swift build
 swift test --scratch-path .build-local
 ```
+
+Two tests in the package (`invalidResumeOffsetIsRejected` and
+`liveSamePeerConnectionOutsideWindowIsDropped`) hang rather than fail. It is
+pre-existing and unrelated to Deck Hand, but it will stall an unattended run, so
+filter them out in CI.
+
+If you came here for the networking library rather than this app, depend on
+upstream instead of this fork:
+
+```swift
+.package(url: "https://github.com/EthanLipnik/Loom.git", from: "1.4.0")
+```
+
+Upstream is also the better reference for the package itself:
+
+- [LoomKit documentation](https://ethanlipnik.github.io/Loom/documentation/loomkit/)
+- [Loom documentation](https://ethanlipnik.github.io/Loom/documentation/loom/)
+- [Architecture notes](Architecture.md)
+
+Keep the boundary in mind when contributing: transport, trust, and diagnostics
+belong in `Sources/`; anything that knows what Deck Hand is belongs in
+`DeckHand/`.
+
+## License
+
+MIT, © Ethan Lipnik. See [LICENSE](LICENSE).
